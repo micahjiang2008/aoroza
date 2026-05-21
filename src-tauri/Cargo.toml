@@ -1,11 +1,11 @@
 [package]
-name = "simple-markdown-editor"
+name = "aoroza-markdown-editor"
 version = "0.1.0"
 description = "A simple markdown editor built with Tauri"
 edition = "2021"
 
 [lib]
-name = "simplemd_lib"
+name = "aoroza_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

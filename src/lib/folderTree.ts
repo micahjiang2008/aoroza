@@ -46,19 +46,27 @@ export function buildFolderTree(
     }
   }
 
+  const compareNames = (a: string, b: string) => {
+    return a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
+  };
+
+  const getNoteName = (n: NoteMetadata) => {
+    return n.id.split('/').pop() || n.id;
+  };
+
   function sortNode(node: FolderNode) {
-    node.children.sort((a, b) => a.name.localeCompare(b.name));
-    node.notes.sort((a, b) => b.modified - a.modified);
+    node.children.sort((a, b) => compareNames(a.name, b.name));
+    node.notes.sort((a, b) => compareNames(getNoteName(a), getNoteName(b)));
     node.children.forEach(sortNode);
   }
 
   const topLevelFolders = Array.from(folderMap.values()).filter(
     (f) => !f.path.includes("/"),
   );
-  topLevelFolders.sort((a, b) => a.name.localeCompare(b.name));
+  topLevelFolders.sort((a, b) => compareNames(a.name, b.name));
   topLevelFolders.forEach(sortNode);
 
-  rootNotes.sort((a, b) => b.modified - a.modified);
+  rootNotes.sort((a, b) => compareNames(getNoteName(a), getNoteName(b)));
 
   return { rootNotes, folders: topLevelFolders };
 }

@@ -1,4 +1,4 @@
-"""Generate SimpleMD app icons at all required sizes."""
+"""Generate Aoroza app icons at all required sizes."""
 from PIL import Image, ImageDraw
 import os
 
@@ -10,7 +10,7 @@ ACCENT = (139, 92, 246)  # violet-500
 FG = (255, 255, 255)
 
 def draw_icon(size: int) -> Image.Image:
-    """Draw SimpleMD logo: rounded square with markdown-inspired 'M'."""
+    """Draw Aoroza logo: rounded square with markdown-inspired 'M'."""
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
     pad = size * 0.06

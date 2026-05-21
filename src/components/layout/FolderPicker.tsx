@@ -40,7 +40,7 @@ export function FolderPicker() {
             className="text-text-muted mb-6 animate-fade-in-up"
             style={{ animationDelay: "100ms" }}
           >
-            SimpleMD stores your notes as plain markdown files on your computer.
+            Aoroza stores your notes as plain markdown files on your computer.
             Just pick a folder to begin.
           </p>
           <div

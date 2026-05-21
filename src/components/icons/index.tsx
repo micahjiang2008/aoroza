@@ -476,6 +476,25 @@ export function PanelLeftIcon({ className = "w-4.5 h-4.5" }: IconProps) {
   );
 }
 
+export function PanelRightIcon({ className = "w-4.5 h-4.5" }: IconProps) {
+  return (
+    <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M4 6a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2v-12" /><path d="M15 4v1" /><path d="M15 9v1" /><path d="M15 14v1" /><path d="M15 19v1" />
+    </svg>
+  );
+}
+
+export function OutlineIcon({ className = "w-4.5 h-4.5" }: IconProps) {
+  return (
+    <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+      <path d="M4 6h16" />
+      <path d="M7 12h13" />
+      <path d="M10 18h10" />
+    </svg>
+  );
+}
+
 export function SwatchIcon({ className = "w-4.5 h-4.5" }: IconProps) {
   return (
     <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">

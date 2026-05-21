@@ -26,8 +26,10 @@ import {
   FolderIcon,
   FolderPlusIcon,
   KeyboardIcon,
+  OutlineIcon,
+  InfoIcon,
 } from "../icons";
-import { mod, shift } from "../../lib/platform";
+import { mod, shift, alt } from "../../lib/platform";
 
 interface Command {
   id: string;
@@ -78,6 +80,20 @@ export function CommandPalette({
         action: () => {
           onClose();
           window.dispatchEvent(new CustomEvent("create-new-folder"));
+        },
+      },
+      {
+        id: "open-folder",
+        label: "Open Notes Folder",
+        icon: <FolderIcon className="w-4.5 h-4.5 stroke-[1.5]" />,
+        action: async () => {
+          try {
+            await invoke("open_in_file_manager", { path: notesFolder });
+            onClose();
+          } catch (error) {
+            console.error("Failed to open folder:", error);
+            toast.error("Failed to open folder");
+          }
         },
       },
     ];
@@ -228,17 +244,22 @@ export function CommandPalette({
         },
       },
       {
-        id: "open-folder",
-        label: "Open Notes Folder",
-        icon: <FolderIcon className="w-4.5 h-4.5 stroke-[1.5]" />,
-        action: async () => {
-          try {
-            await invoke("open_in_file_manager", { path: notesFolder });
-            onClose();
-          } catch (error) {
-            console.error("Failed to open folder:", error);
-            toast.error("Failed to open folder");
-          }
+        id: "toggle-outline",
+        label: "Toggle Outline",
+        shortcut: `${mod} ${alt} O`,
+        icon: <OutlineIcon className="w-4.5 h-4.5 stroke-[1.5]" />,
+        action: () => {
+          window.dispatchEvent(new CustomEvent("toggle-outline"));
+          onClose();
+        },
+      },
+      {
+        id: "toggle-status-bar",
+        label: "Toggle Status Bar",
+        icon: <InfoIcon className="w-4.5 h-4.5 stroke-[1.5]" />,
+        action: () => {
+          window.dispatchEvent(new CustomEvent("toggle-status-bar"));
+          onClose();
         },
       },
       {

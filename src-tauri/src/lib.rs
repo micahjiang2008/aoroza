@@ -77,7 +77,7 @@ fn config_dir() -> Result<PathBuf, String> {
     let home = std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
         .map_err(|_| "Cannot find home directory".to_string())?;
-    let dir = PathBuf::from(home).join(".simplemd");
+    let dir = PathBuf::from(home).join(".aoroza");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     Ok(dir)
 }
@@ -107,7 +107,7 @@ fn save_config(config: &AppConfig) -> Result<(), String> {
 
 // ── Utility functions ────────────────────────────────────────────────────
 
-const EXCLUDED_DIRS: &[&str] = &[".git", ".simplemd", ".obsidian", ".trash"];
+const EXCLUDED_DIRS: &[&str] = &[".git", ".aoroza", ".obsidian", ".trash"];
 
 const DEFAULT_IGNORED_DIRS: &[&str] = &[
     "node_modules", ".next", ".nuxt", "dist", "build", "out", "target",
@@ -362,13 +362,14 @@ fn create_preview_window(app: &tauri::AppHandle, file_path: &str) -> Result<(), 
         .unwrap_or_else(|| "Preview".to_string());
     // Use index.html to avoid 404/blank page when resolving route in production
     let builder = tauri::WebviewWindowBuilder::new(app, &label, tauri::WebviewUrl::App("index.html".into()))
-        .title(format!("{} \u{2014} SimpleMD", filename))
+        .title(format!("{} \u{2014} Aoroza", filename))
         .inner_size(800.0, 600.0)
         .min_inner_size(400.0, 300.0)
         .resizable(true)
         .decorations(true);
     let window = builder.build().map_err(|e| format!("Failed to create preview window: {}", e))?;
-    // Open devtools automatically for debugging
+    // Open devtools automatically for debugging only
+    #[cfg(debug_assertions)]
     let _ = window.open_devtools();
     let win = window.clone();
     std::thread::spawn(move || {

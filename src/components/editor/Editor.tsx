@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback, useState } from "react";
+import { useEffect, useRef, useCallback, useState, useMemo } from "react";
 import {
   useEditor, EditorContent, ReactRenderer, ReactNodeViewRenderer,
   type Editor as TiptapEditor,
@@ -47,7 +47,9 @@ import {
   SpinnerIcon, CircleCheckIcon, CopyIcon, ShareIcon,
   MarkdownIcon, MarkdownOffIcon, PanelLeftIcon,
   SearchIcon, DownloadIcon, BracketsIcon, FolderPlusIcon,
+  OutlineIcon, InfoIcon,
 } from "../icons";
+import { Outline } from "./Outline";
 
 function formatDateTime(timestamp: number): string {
   const date = new Date(timestamp * 1000);
@@ -155,7 +157,7 @@ export function Editor({
   const createNote = notesCtx?.createNote;
   const { textDirection } = useTheme();
   const [isSaving, setIsSaving] = useState(false);
-  const [, setSelectionKey] = useState(0);
+  const [selectionKey, setSelectionKey] = useState(0);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchMatches, setSearchMatches] = useState<Array<{ from: number; to: number }>>([]);
@@ -164,6 +166,8 @@ export function Editor({
   const [sourceContent, setSourceContent] = useState("");
   const [copyMenuOpen, setCopyMenuOpen] = useState(false);
   const [tableMenuOpen, setTableMenuOpen] = useState(false);
+  const [outlineVisible, setOutlineVisible] = useState(false);
+  const [statusBarVisible, setStatusBarVisible] = useState(true);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const saveTimeoutRef = useRef<number | null>(null);
   const linkPopupRef = useRef<TippyInstance | null>(null);
@@ -607,6 +611,7 @@ export function Editor({
     onUpdate: () => {
       if (isSettingContentRef.current) return;
       scheduleSave();
+      setSelectionKey((k) => k + 1);
     },
     onSelectionUpdate: () => { closeLinkPopup(); },
   });
@@ -661,6 +666,9 @@ export function Editor({
     }, 300);
   }, [scheduleSave]);
 
+  const toggleOutline = useCallback(() => setOutlineVisible((v) => !v), []);
+  const toggleStatusBar = useCallback(() => setStatusBarVisible((v) => !v), []);
+
   // Listen for toggle-source-mode custom event from command palette
   useEffect(() => {
     const handler = () => toggleSourceMode();
@@ -668,7 +676,49 @@ export function Editor({
     return () => window.removeEventListener("toggle-source-mode", handler);
   }, [toggleSourceMode]);
 
+  // Listen for toggle-outline custom event from command palette
+  useEffect(() => {
+    const handler = () => toggleOutline();
+    window.addEventListener("toggle-outline", handler);
+    return () => window.removeEventListener("toggle-outline", handler);
+  }, [toggleOutline]);
+
+  // Listen for toggle-status-bar custom event from command palette
+  useEffect(() => {
+    const handler = () => toggleStatusBar();
+    window.addEventListener("toggle-status-bar", handler);
+    return () => window.removeEventListener("toggle-status-bar", handler);
+  }, [toggleStatusBar]);
+
+  // Listen for Ctrl+Alt+O / Cmd+Option+O keyboard shortcut
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const isO = e.key.toLowerCase() === "o";
+      const hasModifiers = (e.ctrlKey && e.altKey) || (e.metaKey && e.altKey);
+      if (isO && hasModifiers) {
+        e.preventDefault();
+        e.stopPropagation();
+        toggleOutline();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [toggleOutline]);
+
   const isActive = (check: (e: TiptapEditor) => boolean) => editor ? check(editor) : false;
+
+  const charCount = useMemo(() => {
+    if (sourceMode) {
+      return sourceContent.length;
+    }
+    if (editor) {
+      return editor.state.doc.textContent.length;
+    }
+    return 0;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sourceMode, sourceContent, editor, selectionKey]);
+
+  const readingTime = Math.max(1, Math.ceil(charCount / 350));
 
   if (!currentNote) {
     // Preview mode: show loading state (content not yet loaded)
@@ -804,6 +854,18 @@ export function Editor({
             </IconButton>
           </Tooltip>
 
+          <Tooltip content={outlineVisible ? "Hide Outline" : `Show Outline (${mod}${isMac ? "" : "+"}${alt}${isMac ? "" : "+"}O)`}>
+            <IconButton onClick={toggleOutline} className={outlineVisible ? "text-accent bg-bg-muted" : ""} disabled={sourceMode}>
+              <OutlineIcon className="w-4.5 h-4.5 stroke-[1.5]" />
+            </IconButton>
+          </Tooltip>
+
+          <Tooltip content={statusBarVisible ? "Hide Status Bar" : "Show Status Bar"}>
+            <IconButton onClick={toggleStatusBar} className={statusBarVisible ? "text-accent bg-bg-muted" : ""}>
+              <InfoIcon className="w-4.5 h-4.5 stroke-[1.5]" />
+            </IconButton>
+          </Tooltip>
+
           <DropdownMenu.Root open={copyMenuOpen} onOpenChange={setCopyMenuOpen}>
             <Tooltip content={`Export`}>
               <DropdownMenu.Trigger asChild>
@@ -901,19 +963,32 @@ export function Editor({
       )}
 
       {/* Editor content area with resize handles overlay */}
-      <div data-editor-content-area className="flex-1 relative overflow-hidden">
-        <EditorWidthHandles containerRef={scrollContainerRef} />
-        <div ref={scrollContainerRef} className="absolute inset-0 overflow-y-auto overflow-x-hidden" dir={textDirection}>
-          {sourceMode ? (
-            <textarea value={sourceContent} onChange={handleSourceChange}
-              className="w-full h-full resize-none border-0 bg-transparent text-sm font-mono text-text p-6 outline-none"
-              spellCheck={false} />
-          ) : (
-            <div className="mx-auto py-4 px-6">
-              <EditorContent editor={editor} />
+      <div data-editor-content-area className="flex-1 relative overflow-hidden flex flex-row">
+        <div className="flex-1 relative overflow-hidden">
+          <EditorWidthHandles containerRef={scrollContainerRef} />
+          <div ref={scrollContainerRef} className="absolute inset-0 overflow-y-auto overflow-x-hidden" dir={textDirection}>
+            {sourceMode ? (
+              <textarea value={sourceContent} onChange={handleSourceChange}
+                className="w-full h-full resize-none border-0 bg-transparent text-sm font-mono text-text pt-6 px-6 pb-16 outline-none"
+                spellCheck={false} />
+            ) : (
+              <div className="mx-auto pt-4 pb-16 px-6">
+                <EditorContent editor={editor} />
+              </div>
+            )}
+          </div>
+          {/* Status Bar */}
+          {statusBarVisible && (
+            <div className="absolute bottom-0 right-[12px] z-20 select-none pointer-events-none">
+              <span className="px-2.5 py-0.75 rounded-t-md bg-bg-muted/70 text-2xs text-text-muted shadow-sm border-t border-x border-border/30 backdrop-blur-sm pointer-events-auto block">
+                {charCount} {charCount === 1 ? "character" : "characters"} | {readingTime} min read
+              </span>
             </div>
           )}
         </div>
+        {!sourceMode && outlineVisible && (
+          <Outline editor={editor} scrollContainer={scrollContainerRef.current} />
+        )}
       </div>
     </div>
   );
