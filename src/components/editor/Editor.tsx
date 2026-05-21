@@ -21,6 +21,7 @@ import tippy, { type Instance as TippyInstance } from "tippy.js";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { toast } from "sonner";
 import { mod, shift, alt, isMac } from "../../lib/platform";
 import { useOptionalNotes } from "../../context/NotesContext";
@@ -47,7 +48,7 @@ import {
   SpinnerIcon, CircleCheckIcon, CopyIcon, ShareIcon,
   MarkdownIcon, MarkdownOffIcon, PanelLeftIcon,
   SearchIcon, DownloadIcon, BracketsIcon, FolderPlusIcon,
-  OutlineIcon, InfoIcon,
+  OutlineIcon, InfoIcon, MinusIcon, MaximizeIcon, XIcon,
 } from "../icons";
 import { Outline } from "./Outline";
 
@@ -181,6 +182,18 @@ export function Editor({
   const isSettingContentRef = useRef(false);
 
   currentNoteIdRef.current = currentNote?.id ?? null;
+
+  const minimizeWindow = useCallback(() => {
+    getCurrentWindow().minimize().catch(console.error);
+  }, []);
+
+  const toggleMaximizeWindow = useCallback(() => {
+    getCurrentWindow().toggleMaximize().catch(console.error);
+  }, []);
+
+  const closeWindow = useCallback(() => {
+    getCurrentWindow().close().catch(console.error);
+  }, []);
 
   const getMarkdown = useCallback((editorInstance: TiptapEditor | null) => {
     if (!editorInstance) return "";
@@ -899,6 +912,24 @@ export function Editor({
               </DropdownMenu.Content>
             </DropdownMenu.Portal>
           </DropdownMenu.Root>
+          {!isMac && (
+            <div className="ml-1 flex items-center gap-px border-l border-border/70 pl-1">
+              <IconButton onClick={minimizeWindow} title="Minimize window" aria-label="Minimize window">
+                <MinusIcon className="w-4.25 h-4.25 stroke-[1.7]" />
+              </IconButton>
+              <IconButton onClick={toggleMaximizeWindow} title="Maximize window" aria-label="Maximize window">
+                <MaximizeIcon className="w-4 h-4 stroke-[1.55]" />
+              </IconButton>
+              <IconButton
+                onClick={closeWindow}
+                title="Close window"
+                aria-label="Close window"
+                className="hover:bg-red-500/15 hover:text-red-500"
+              >
+                <XIcon className="w-4.25 h-4.25 stroke-[1.7]" />
+              </IconButton>
+            </div>
+          )}
           {onSaveToFolder && (
             <Tooltip content="Save in Folder">
               <IconButton

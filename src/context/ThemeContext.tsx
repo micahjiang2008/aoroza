@@ -6,16 +6,15 @@ import {
   useCallback,
   type ReactNode,
 } from "react";
-import { getSettings, updateSettings } from "../services/notes";
+import { getSettings, loadThemeCss, listThemeSchemas, updateSettings } from "../services/notes";
 import type {
   EditorFontSettings,
   TextDirection,
   EditorWidth,
-  CustomColors,
-  ThemeColorKey,
+  ThemeSchema,
 } from "../types/note";
 
-type ThemeMode = "light" | "dark" | "system";
+type ThemeMode = "light" | "dark";
 
 const BUILT_IN_FONTS: Record<string, string> = {
   "system-sans":
@@ -58,38 +57,23 @@ const defaultEditorFontSettings: Required<EditorFontSettings> = {
   lineHeight: 1.6,
 };
 
-const defaultThemeColors: Record<"light" | "dark", Record<ThemeColorKey, string>> = {
-  light: {
-    bg: "#ffffff",
-    "bg-secondary": "#fafaf9",
-    "bg-muted": "rgba(28, 25, 23, 0.06)",
-    "bg-emphasis": "rgba(28, 25, 23, 0.09)",
-    text: "#1c1917",
-    "text-muted": "#78716c",
-    border: "rgba(28, 25, 23, 0.08)",
-    accent: "#1c1917",
-    selection: "rgba(250, 204, 21, 0.4)",
-  },
-  dark: {
-    bg: "rgb(22, 20, 19)",
-    "bg-secondary": "rgb(14, 12, 11)",
-    "bg-muted": "rgba(250, 249, 249, 0.05)",
-    "bg-emphasis": "rgba(250, 249, 249, 0.08)",
-    text: "#fafaf9",
-    "text-muted": "#a8a29e",
-    border: "rgba(250, 249, 249, 0.07)",
-    accent: "#fafaf9",
-    selection: "rgba(253, 224, 71, 0.35)",
-  },
+const DEFAULT_SCHEMA_BY_MODE: Record<ThemeMode, string> = {
+  light: "default",
+  dark: "default",
 };
 
-export { defaultThemeColors };
+const USER_THEME_STYLE_ID = "aoroza-user-theme-css";
 
 interface ThemeContextType {
   theme: ThemeMode;
   resolvedTheme: "light" | "dark";
   setTheme: (theme: ThemeMode) => void;
   cycleTheme: () => void;
+  colorSchema: string;
+  setColorSchema: (schema: string) => void;
+  themeSchemas: ThemeSchema[];
+  availableColorSchemas: ThemeSchema[];
+  reloadThemeCss: () => Promise<void>;
   editorFontSettings: Required<EditorFontSettings>;
   setEditorFontSetting: <K extends keyof EditorFontSettings>(
     key: K, value: EditorFontSettings[K]
@@ -105,11 +89,6 @@ interface ThemeContextType {
   customEditorWidthPx: number;
   setCustomEditorWidthPx: (px: number) => void;
   setEditorMaxWidthLive: (value: string) => void;
-  customColorsLight: CustomColors;
-  customColorsDark: CustomColors;
-  setCustomColor: (mode: "light" | "dark", key: ThemeColorKey, value: string) => void;
-  resetCustomColor: (mode: "light" | "dark", key: ThemeColorKey) => void;
-  resetAllCustomColors: (mode: "light" | "dark") => void;
   customFonts: string[];
   getAvailableFonts: () => { value: string; label: string }[];
 }
@@ -154,29 +133,66 @@ function isTextDirection(value: unknown): value is TextDirection {
   return value === "auto" || value === "ltr" || value === "rtl";
 }
 
+function getInitialTheme(): ThemeMode {
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+function chooseColorSchemaForMode(
+  mode: ThemeMode,
+  requested: string | undefined,
+  schemas: ThemeSchema[],
+): string {
+  const available = schemas.filter((schema) => schema.mode === mode);
+  if (requested && available.some((schema) => schema.name === requested)) return requested;
+  const defaultSchema = DEFAULT_SCHEMA_BY_MODE[mode];
+  if (available.some((schema) => schema.name === defaultSchema)) return defaultSchema;
+  return available[0]?.name ?? "default";
+}
+
+function installThemeCss(css: string) {
+  let style = document.getElementById(USER_THEME_STYLE_ID) as HTMLStyleElement | null;
+  if (!style) {
+    style = document.createElement("style");
+    style.id = USER_THEME_STYLE_ID;
+    document.head.appendChild(style);
+  }
+  style.textContent = css;
+}
+
 export function ThemeProvider({ children }: ThemeProviderProps) {
-  const [theme, setThemeState] = useState<ThemeMode>("system");
+  const [theme, setThemeState] = useState<ThemeMode>(() => getInitialTheme());
+  const [colorSchema, setColorSchemaState] = useState<string>(() => DEFAULT_SCHEMA_BY_MODE[getInitialTheme()]);
+  const [themeSchemas, setThemeSchemas] = useState<ThemeSchema[]>([]);
   const [editorFontSettings, setEditorFontSettings] = useState<Required<EditorFontSettings>>(defaultEditorFontSettings);
   const [textDirection, setTextDirectionState] = useState<TextDirection>("auto");
   const [editorWidth, setEditorWidthState] = useState<EditorWidth>("normal");
   const [interfaceZoom, setInterfaceZoomState] = useState(1.0);
   const [customEditorWidthPx, setCustomEditorWidthPxState] = useState(DEFAULT_CUSTOM_WIDTH_PX);
-  const [customColorsLight, setCustomColorsLightState] = useState<CustomColors>({});
-  const [customColorsDark, setCustomColorsDarkState] = useState<CustomColors>({});
   const [customFonts, setCustomFontsState] = useState<string[]>([]);
   const [isInitialized, setIsInitialized] = useState(false);
 
-  const [systemTheme, setSystemTheme] = useState<"light" | "dark">(() =>
-    window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"
-  );
-
   const loadSettingsFromBackend = useCallback(async () => {
     try {
-      const settings = await getSettings();
+      const [settings, schemas, themeCss] = await Promise.all([
+        getSettings(),
+        listThemeSchemas(),
+        loadThemeCss(),
+      ]);
+      installThemeCss(themeCss);
+      setThemeSchemas(schemas);
+
+      let loadedTheme = getInitialTheme();
       if (settings.theme) {
         const mode = settings.theme.mode as ThemeMode;
-        if (mode === "light" || mode === "dark" || mode === "system") setThemeState(mode);
+        if (mode === "light" || mode === "dark") loadedTheme = mode;
       }
+      const loadedSchema = chooseColorSchemaForMode(
+        loadedTheme,
+        settings.theme?.colorSchema,
+        schemas,
+      );
+      setThemeState(loadedTheme);
+      setColorSchemaState(loadedSchema);
       if (settings.editorFont) {
         const fontSettings = Object.fromEntries(
           Object.entries(settings.editorFont).filter(([, v]) => v != null)
@@ -194,8 +210,6 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
       if (typeof settings.customEditorWidthPx === "number" && settings.customEditorWidthPx >= 480) {
         setCustomEditorWidthPxState(settings.customEditorWidthPx);
       }
-      if (settings.customColorsLight) setCustomColorsLightState(settings.customColorsLight);
-      if (settings.customColorsDark) setCustomColorsDarkState(settings.customColorsDark);
       if (settings.customFonts) setCustomFontsState(settings.customFonts);
     } catch {
       // Use defaults on failure
@@ -210,38 +224,51 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
     loadSettingsFromBackend().finally(() => setIsInitialized(true));
   }, [loadSettingsFromBackend]);
 
-  useEffect(() => {
-    const mq = window.matchMedia("(prefers-color-scheme: dark)");
-    const handler = (e: MediaQueryListEvent) => setSystemTheme(e.matches ? "dark" : "light");
-    mq.addEventListener("change", handler);
-    return () => mq.removeEventListener("change", handler);
-  }, []);
-
-  const resolvedTheme = theme === "system" ? systemTheme : theme;
+  const resolvedTheme = theme;
+  const availableColorSchemas = themeSchemas.filter((schema) => schema.mode === theme);
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", resolvedTheme === "dark");
-  }, [resolvedTheme]);
+    document.documentElement.dataset.theme = resolvedTheme;
+    document.documentElement.dataset.colorSchema = colorSchema;
+  }, [resolvedTheme, colorSchema]);
 
-  const saveThemeSettings = useCallback(async (newMode: ThemeMode) => {
+  const saveThemeSettings = useCallback(async (newMode: ThemeMode, newSchema: string) => {
     try {
       const settings = await getSettings();
-      await updateSettings({ ...settings, theme: { mode: newMode } });
+      await updateSettings({ ...settings, theme: { mode: newMode, colorSchema: newSchema } });
     } catch (error) {
       console.error("Failed to save theme settings:", error);
     }
   }, []);
 
   const setTheme = useCallback((newTheme: ThemeMode) => {
+    const nextSchema = chooseColorSchemaForMode(newTheme, colorSchema, themeSchemas);
     setThemeState(newTheme);
-    saveThemeSettings(newTheme);
-  }, [saveThemeSettings]);
+    setColorSchemaState(nextSchema);
+    saveThemeSettings(newTheme, nextSchema);
+  }, [colorSchema, saveThemeSettings, themeSchemas]);
+
+  const setColorSchema = useCallback((newSchema: string) => {
+    const nextSchema = chooseColorSchemaForMode(theme, newSchema, themeSchemas);
+    setColorSchemaState(nextSchema);
+    saveThemeSettings(theme, nextSchema);
+  }, [saveThemeSettings, theme, themeSchemas]);
 
   const cycleTheme = useCallback(() => {
-    const order: ThemeMode[] = ["light", "dark", "system"];
+    const order: ThemeMode[] = ["light", "dark"];
     const currentIndex = order.indexOf(theme);
     setTheme(order[(currentIndex + 1) % order.length]);
   }, [theme, setTheme]);
+
+  const reloadThemeCss = useCallback(async () => {
+    const [schemas, themeCss] = await Promise.all([listThemeSchemas(), loadThemeCss()]);
+    installThemeCss(themeCss);
+    setThemeSchemas(schemas);
+    const nextSchema = chooseColorSchemaForMode(theme, colorSchema, schemas);
+    setColorSchemaState(nextSchema);
+    saveThemeSettings(theme, nextSchema);
+  }, [colorSchema, saveThemeSettings, theme]);
 
   useEffect(() => { applyFontCSSVariables(editorFontSettings); }, [editorFontSettings]);
   useEffect(() => { applyLayoutCSSVariables(editorWidth, customEditorWidthPx); }, [editorWidth, customEditorWidthPx]);
@@ -276,14 +303,11 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
     setEditorWidthState("normal");
     setInterfaceZoomState(1.0);
     setCustomEditorWidthPxState(DEFAULT_CUSTOM_WIDTH_PX);
-    setCustomColorsLightState({});
-    setCustomColorsDarkState({});
     try {
       const settings = await getSettings();
       await updateSettings({
         ...settings, editorFont: defaultEditorFontSettings, textDirection: "auto",
         editorWidth: "normal", interfaceZoom: 1.0, customEditorWidthPx: undefined,
-        customColorsLight: undefined, customColorsDark: undefined,
       });
     } catch (error) {
       console.error("Failed to reset editor settings:", error);
@@ -321,44 +345,6 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
     catch (e) { console.error("Failed to save custom width:", e); }
   }, []);
 
-  useEffect(() => {
-    const root = document.documentElement;
-    const active = resolvedTheme === "dark" ? customColorsDark : customColorsLight;
-    const defaults = defaultThemeColors[resolvedTheme];
-    const keys: ThemeColorKey[] = ["bg","bg-secondary","bg-muted","bg-emphasis","text","text-muted","border","accent","selection"];
-    for (const key of keys) {
-      root.style.setProperty(`--color-${key}`, active[key] ?? defaults[key]);
-    }
-  }, [resolvedTheme, customColorsLight, customColorsDark]);
-
-  const setCustomColor = useCallback(async (mode: "light" | "dark", key: ThemeColorKey, value: string) => {
-    const setter = mode === "light" ? setCustomColorsLightState : setCustomColorsDarkState;
-    const settingsKey = mode === "light" ? "customColorsLight" : "customColorsDark";
-    setter((prev) => {
-      const updated = { ...prev, [key]: value };
-      getSettings().then((s) => updateSettings({ ...s, [settingsKey]: updated })).catch(() => {});
-      return updated;
-    });
-  }, []);
-
-  const resetCustomColor = useCallback(async (mode: "light" | "dark", key: ThemeColorKey) => {
-    const setter = mode === "light" ? setCustomColorsLightState : setCustomColorsDarkState;
-    const settingsKey = mode === "light" ? "customColorsLight" : "customColorsDark";
-    setter((prev) => {
-      const updated = { ...prev }; delete updated[key];
-      getSettings().then((s) => updateSettings({ ...s, [settingsKey]: Object.keys(updated).length > 0 ? updated : undefined })).catch(() => {});
-      return updated;
-    });
-  }, []);
-
-  const resetAllCustomColors = useCallback(async (mode: "light" | "dark") => {
-    const setter = mode === "light" ? setCustomColorsLightState : setCustomColorsDarkState;
-    const settingsKey = mode === "light" ? "customColorsLight" : "customColorsDark";
-    setter({});
-    try { const s = await getSettings(); await updateSettings({ ...s, [settingsKey]: undefined }); }
-    catch (e) { console.error("Failed to reset custom colors:", e); }
-  }, []);
-
   const setEditorMaxWidthLive = useCallback((value: string) => {
     document.documentElement.style.setProperty("--editor-max-width", value);
   }, []);
@@ -373,10 +359,10 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
       <ThemeContext.Provider
         value={{
           theme, resolvedTheme, setTheme, cycleTheme,
+          colorSchema, setColorSchema, themeSchemas, availableColorSchemas, reloadThemeCss,
           editorFontSettings, setEditorFontSetting, resetEditorFontSettings, reloadSettings,
           textDirection, setTextDirection, editorWidth, setEditorWidth,
           interfaceZoom, setInterfaceZoom, customEditorWidthPx, setCustomEditorWidthPx, setEditorMaxWidthLive,
-          customColorsLight, customColorsDark, setCustomColor, resetCustomColor, resetAllCustomColors,
           customFonts, getAvailableFonts: getAvailableFontsCb,
         }}
       >
@@ -389,10 +375,10 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
     <ThemeContext.Provider
       value={{
         theme, resolvedTheme, setTheme, cycleTheme,
+        colorSchema, setColorSchema, themeSchemas, availableColorSchemas, reloadThemeCss,
         editorFontSettings, setEditorFontSetting, resetEditorFontSettings, reloadSettings,
         textDirection, setTextDirection, editorWidth, setEditorWidth,
         interfaceZoom, setInterfaceZoom, customEditorWidthPx, setCustomEditorWidthPx, setEditorMaxWidthLive,
-        customColorsLight, customColorsDark, setCustomColor, resetCustomColor, resetAllCustomColors,
         customFonts, getAvailableFonts: getAvailableFontsCb,
       }}
     >

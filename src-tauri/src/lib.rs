@@ -13,6 +13,7 @@ use walkdir::WalkDir;
 #[serde(rename_all = "camelCase")]
 pub struct ThemeSettings {
     pub mode: String,
+    pub color_schema: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -37,8 +38,6 @@ pub struct Settings {
     pub editor_width: Option<String>,
     pub custom_editor_width_px: Option<i32>,
     pub interface_zoom: Option<f32>,
-    pub custom_colors_light: Option<HashMap<String, String>>,
-    pub custom_colors_dark: Option<HashMap<String, String>>,
     pub custom_fonts: Option<Vec<String>>,
 }
 
@@ -66,6 +65,19 @@ pub struct Note {
     pub modified: i64,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThemeSchema {
+    pub name: String,
+    pub label: String,
+    pub mode: String,
+}
+
+struct ThemeSchemaDefinition {
+    info: ThemeSchema,
+    colors: HashMap<String, String>,
+}
+
 pub struct AppState {
     pub app_config: RwLock<AppConfig>,
     pub preview_file_paths: RwLock<HashMap<String, String>>,
@@ -84,6 +96,10 @@ fn config_dir() -> Result<PathBuf, String> {
 
 fn config_path() -> Result<PathBuf, String> {
     Ok(config_dir()?.join("config.json"))
+}
+
+fn theme_css_path() -> Result<PathBuf, String> {
+    Ok(config_dir()?.join("theme.css"))
 }
 
 fn load_config() -> AppConfig {
@@ -105,19 +121,317 @@ fn save_config(config: &AppConfig) -> Result<(), String> {
     Ok(())
 }
 
+const COLOR_SCHEMA_SOURCE_DIR: &str = r"D:\MYWORK\pi-desktop\docs\CodexColorSchema";
+
+fn strip_md_value(line: &str, prefix: &str) -> Option<String> {
+    line.strip_prefix(prefix)
+        .map(|v| v.trim().trim_matches('`').to_string())
+        .filter(|v| !v.is_empty())
+}
+
+fn parse_color_schema_file(path: &Path) -> Result<Option<ThemeSchemaDefinition>, String> {
+    let content = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let mut label = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("untitled")
+        .replace('-', " ");
+    let mut mode = String::new();
+    let mut name = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("untitled")
+        .to_string();
+    let mut colors = HashMap::new();
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if let Some(title) = trimmed.strip_prefix("# ") {
+            label = title.trim().to_string();
+            continue;
+        }
+        if let Some(value) = strip_md_value(trimmed, "- **Type:**") {
+            mode = value.to_lowercase();
+            continue;
+        }
+        if let Some(value) = strip_md_value(trimmed, "- **System name:**") {
+            name = value;
+            continue;
+        }
+        if !trimmed.starts_with('|') || trimmed.contains("---") || trimmed.contains("Token") {
+            continue;
+        }
+        let cells: Vec<&str> = trimmed
+            .trim_matches('|')
+            .split('|')
+            .map(|c| c.trim())
+            .collect();
+        if cells.len() < 2 {
+            continue;
+        }
+        let token = cells[0].to_string();
+        let color = cells[1].trim_matches('`').trim().to_string();
+        if !token.is_empty() && !color.is_empty() {
+            colors.insert(token, color);
+        }
+    }
+
+    if mode != "light" && mode != "dark" {
+        if name.contains("dark") {
+            mode = "dark".to_string();
+        } else if name.contains("light") {
+            mode = "light".to_string();
+        }
+    }
+
+    if name.is_empty() || (mode != "light" && mode != "dark") {
+        return Ok(None);
+    }
+
+    Ok(Some(ThemeSchemaDefinition {
+        info: ThemeSchema { name, label, mode },
+        colors,
+    }))
+}
+
+fn read_color_schema_definitions() -> Result<Vec<ThemeSchemaDefinition>, String> {
+    let source = PathBuf::from(COLOR_SCHEMA_SOURCE_DIR);
+    if !source.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut definitions = Vec::new();
+    for entry in std::fs::read_dir(source).map_err(|e| e.to_string())? {
+        let path = entry.map_err(|e| e.to_string())?.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("md") {
+            continue;
+        }
+        if let Some(definition) = parse_color_schema_file(&path)? {
+            definitions.push(definition);
+        }
+    }
+
+    definitions.sort_by(|a, b| {
+        a.info.mode.cmp(&b.info.mode).then_with(|| {
+            a.info
+                .label
+                .to_lowercase()
+                .cmp(&b.info.label.to_lowercase())
+        })
+    });
+    Ok(definitions)
+}
+
+fn pick_color(colors: &HashMap<String, String>, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| colors.get(*key).cloned())
+}
+
+fn css_attr_value(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn schema_css_property(
+    colors: &HashMap<String, String>,
+    css_key: &str,
+    tokens: &[&str],
+    fallback: &str,
+) -> String {
+    let value = pick_color(colors, tokens).unwrap_or_else(|| fallback.to_string());
+    format!("  --color-{}: {};\n", css_key, value)
+}
+
+fn generate_theme_css(definitions: &[ThemeSchemaDefinition]) -> String {
+    let mut css =
+        String::from("/* Generated from D:\\MYWORK\\pi-desktop\\docs\\CodexColorSchema. */\n");
+    css.push_str("/* Edit source Markdown files and restart Aoroza to refresh this file. */\n\n");
+    css.push_str(
+        r#":root[data-theme="light"][data-color-schema="default"] {
+  --color-bg: #ffffff;
+  --color-bg-secondary: #fafaf9;
+  --color-bg-muted: rgba(28, 25, 23, 0.06);
+  --color-bg-emphasis: rgba(28, 25, 23, 0.09);
+  --color-text: #1c1917;
+  --color-text-muted: #78716c;
+  --color-text-inverse: #fafaf9;
+  --color-border: rgba(28, 25, 23, 0.08);
+  --color-accent: #1c1917;
+  --color-selection: rgba(250, 204, 21, 0.4);
+}
+
+:root[data-theme="dark"][data-color-schema="default"] {
+  --color-bg: rgb(22, 20, 19);
+  --color-bg-secondary: rgb(14, 12, 11);
+  --color-bg-muted: rgba(250, 249, 249, 0.05);
+  --color-bg-emphasis: rgba(250, 249, 249, 0.08);
+  --color-text: #fafaf9;
+  --color-text-muted: #a8a29e;
+  --color-text-inverse: #0c0a09;
+  --color-border: rgba(250, 249, 249, 0.07);
+  --color-accent: #fafaf9;
+  --color-selection: rgba(253, 224, 71, 0.35);
+}
+
+"#,
+    );
+
+    for definition in definitions {
+        let mode = &definition.info.mode;
+        let name = css_attr_value(&definition.info.name);
+        let colors = &definition.colors;
+        let inverse = if mode == "dark" { "#0c0a09" } else { "#fafaf9" };
+        let muted_fallback = if mode == "dark" { "#a8a29e" } else { "#78716c" };
+        let border_fallback = if mode == "dark" {
+            "rgba(250, 249, 249, 0.07)"
+        } else {
+            "rgba(28, 25, 23, 0.08)"
+        };
+
+        css.push_str(&format!(
+            ":root[data-theme=\"{}\"][data-color-schema=\"{}\"] {{\n",
+            mode, name
+        ));
+        css.push_str(&schema_css_property(
+            colors,
+            "bg",
+            &["editor.background"],
+            if mode == "dark" {
+                "rgb(22, 20, 19)"
+            } else {
+                "#ffffff"
+            },
+        ));
+        css.push_str(&schema_css_property(
+            colors,
+            "bg-secondary",
+            &[
+                "sideBar.background",
+                "panel.background",
+                "editorGroupHeader.tabsBackground",
+            ],
+            if mode == "dark" {
+                "rgb(14, 12, 11)"
+            } else {
+                "#fafaf9"
+            },
+        ));
+        css.push_str(&schema_css_property(
+            colors,
+            "bg-muted",
+            &["list.hoverBackground", "list.inactiveSelectionBackground"],
+            if mode == "dark" {
+                "rgba(250, 249, 249, 0.05)"
+            } else {
+                "rgba(28, 25, 23, 0.06)"
+            },
+        ));
+        css.push_str(&schema_css_property(
+            colors,
+            "bg-emphasis",
+            &["list.activeSelectionBackground", "tab.inactiveBackground"],
+            if mode == "dark" {
+                "rgba(250, 249, 249, 0.08)"
+            } else {
+                "rgba(28, 25, 23, 0.09)"
+            },
+        ));
+        css.push_str(&schema_css_property(
+            colors,
+            "text",
+            &["editor.foreground", "foreground"],
+            if mode == "dark" { "#fafaf9" } else { "#1c1917" },
+        ));
+        css.push_str(&schema_css_property(
+            colors,
+            "text-muted",
+            &[
+                "sideBar.foreground",
+                "tab.inactiveForeground",
+                "titleBar.activeForeground",
+            ],
+            muted_fallback,
+        ));
+        css.push_str(&format!("  --color-text-inverse: {};\n", inverse));
+        css.push_str(&schema_css_property(
+            colors,
+            "border",
+            &["input.border", "tab.border"],
+            border_fallback,
+        ));
+        css.push_str(&schema_css_property(
+            colors,
+            "accent",
+            &[
+                "button.background",
+                "focusBorder",
+                "textLink.foreground",
+                "activityBar.activeBorder",
+            ],
+            if mode == "dark" { "#fafaf9" } else { "#1c1917" },
+        ));
+        css.push_str(&schema_css_property(
+            colors,
+            "selection",
+            &[
+                "editor.selectionBackground",
+                "list.activeSelectionBackground",
+                "activityBarBadge.background",
+            ],
+            if mode == "dark" {
+                "rgba(253, 224, 71, 0.35)"
+            } else {
+                "rgba(250, 204, 21, 0.4)"
+            },
+        ));
+        css.push_str("}\n\n");
+    }
+
+    css
+}
+
+fn refresh_theme_css_file() -> Result<(Vec<ThemeSchema>, String), String> {
+    let definitions = read_color_schema_definitions()?;
+    let css = generate_theme_css(&definitions);
+    std::fs::write(theme_css_path()?, &css).map_err(|e| e.to_string())?;
+    let mut schemas = vec![
+        ThemeSchema {
+            name: "default".to_string(),
+            label: "Default".to_string(),
+            mode: "light".to_string(),
+        },
+        ThemeSchema {
+            name: "default".to_string(),
+            label: "Default".to_string(),
+            mode: "dark".to_string(),
+        },
+    ];
+    schemas.extend(definitions.into_iter().map(|d| d.info));
+    Ok((schemas, css))
+}
+
 // ── Utility functions ────────────────────────────────────────────────────
 
 const EXCLUDED_DIRS: &[&str] = &[".git", ".aoroza", ".obsidian", ".trash"];
 
 const DEFAULT_IGNORED_DIRS: &[&str] = &[
-    "node_modules", ".next", ".nuxt", "dist", "build", "out", "target",
-    "vendor", "__pycache__", ".venv", "venv", ".cache",
+    "node_modules",
+    ".next",
+    ".nuxt",
+    "dist",
+    "build",
+    "out",
+    "target",
+    "vendor",
+    "__pycache__",
+    ".venv",
+    "venv",
+    ".cache",
 ];
 
 fn get_effective_ignored_dirs(settings: &Settings) -> Vec<String> {
-    settings.ignored_patterns.clone().unwrap_or_else(|| {
-        DEFAULT_IGNORED_DIRS.iter().map(|s| s.to_string()).collect()
-    })
+    settings
+        .ignored_patterns
+        .clone()
+        .unwrap_or_else(|| DEFAULT_IGNORED_DIRS.iter().map(|s| s.to_string()).collect())
 }
 
 fn is_visible_entry(entry: &walkdir::DirEntry, ignored_dirs: &[String]) -> bool {
@@ -151,7 +465,10 @@ fn strip_frontmatter(content: &str) -> &str {
         if let Some(rest) = trimmed.strip_prefix("---") {
             if let Some(end) = rest.find("\n---") {
                 let after = &rest[end + 4..];
-                return after.strip_prefix("\r\n").or_else(|| after.strip_prefix('\n')).unwrap_or(after);
+                return after
+                    .strip_prefix("\r\n")
+                    .or_else(|| after.strip_prefix('\n'))
+                    .unwrap_or(after);
             }
         }
     }
@@ -182,25 +499,33 @@ fn strip_markdown(text: &str) -> String {
         if let Some(e) = result[s + 2..].find("~~") {
             let inner = &result[s + 2..s + 2 + e];
             result = format!("{}{}{}", &result[..s], inner, &result[s + 4 + e..]);
-        } else { break; }
+        } else {
+            break;
+        }
     }
     while let Some(s) = result.find("**") {
         if let Some(e) = result[s + 2..].find("**") {
             let inner = &result[s + 2..s + 2 + e];
             result = format!("{}{}{}", &result[..s], inner, &result[s + 4 + e..]);
-        } else { break; }
+        } else {
+            break;
+        }
     }
     while let Some(s) = result.find("__") {
         if let Some(e) = result[s + 2..].find("__") {
             let inner = &result[s + 2..s + 2 + e];
             result = format!("{}{}{}", &result[..s], inner, &result[s + 4 + e..]);
-        } else { break; }
+        } else {
+            break;
+        }
     }
     while let Some(s) = result.find('`') {
         if let Some(e) = result[s + 1..].find('`') {
             let inner = &result[s + 1..s + 1 + e];
             result = format!("{}{}{}", &result[..s], inner, &result[s + 2 + e..]);
-        } else { break; }
+        } else {
+            break;
+        }
     }
     let img_re = Regex::new(r"!\[([^\]]*)\]\([^)]+\)").unwrap();
     result = img_re.replace_all(&result, "$1").to_string();
@@ -208,20 +533,35 @@ fn strip_markdown(text: &str) -> String {
     result = link_re.replace_all(&result, "$1").to_string();
     while let Some(s) = result.find('*') {
         if let Some(e) = result[s + 1..].find('*') {
-            if e > 0 { let inner = &result[s + 1..s + 1 + e]; result = format!("{}{}{}", &result[..s], inner, &result[s + 2 + e..]); } else { break; }
-        } else { break; }
+            if e > 0 {
+                let inner = &result[s + 1..s + 1 + e];
+                result = format!("{}{}{}", &result[..s], inner, &result[s + 2 + e..]);
+            } else {
+                break;
+            }
+        } else {
+            break;
+        }
     }
     while let Some(s) = result.find('_') {
         if let Some(e) = result[s + 1..].find('_') {
-            if e > 0 { let inner = &result[s + 1..s + 1 + e]; result = format!("{}{}{}", &result[..s], inner, &result[s + 2 + e..]); } else { break; }
-        } else { break; }
+            if e > 0 {
+                let inner = &result[s + 1..s + 1 + e];
+                result = format!("{}{}{}", &result[..s], inner, &result[s + 2 + e..]);
+            } else {
+                break;
+            }
+        } else {
+            break;
+        }
     }
     result = result.replace("- [ ] ", "").replace("- [x] ", "");
     result.trim().to_string()
 }
 
 fn is_effectively_empty(s: &str) -> bool {
-    s.chars().all(|c| c.is_whitespace() || c == '\u{00A0}' || c == '\u{FEFF}')
+    s.chars()
+        .all(|c| c.is_whitespace() || c == '\u{00A0}' || c == '\u{FEFF}')
 }
 
 fn update_heading(content: &str, new_title: &str) -> String {
@@ -240,11 +580,20 @@ fn update_heading(content: &str, new_title: &str) -> String {
 }
 
 fn sanitize_filename(title: &str) -> String {
-    let s: String = title.chars().filter(|c| *c != '\u{00A0}' && *c != '\u{FEFF}')
-        .map(|c| match c { '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '-', _ => c })
+    let s: String = title
+        .chars()
+        .filter(|c| *c != '\u{00A0}' && *c != '\u{FEFF}')
+        .map(|c| match c {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '-',
+            _ => c,
+        })
         .collect();
     let trimmed = s.trim();
-    if trimmed.is_empty() || is_effectively_empty(trimmed) { "Untitled".to_string() } else { trimmed.to_string() }
+    if trimmed.is_empty() || is_effectively_empty(trimmed) {
+        "Untitled".to_string()
+    } else {
+        trimmed.to_string()
+    }
 }
 
 fn ordinal_suffix(day: u32) -> &'static str {
@@ -271,7 +620,10 @@ fn expand_note_name_template(template: &str) -> String {
     result = result.replace("{weekday}", &now.format("%A").to_string());
     result = result.replace("{weekdayShort}", &now.format("%a").to_string());
     let day_num = now.day();
-    result = result.replace("{dayOrdinal}", &format!("{}{}", day_num, ordinal_suffix(day_num)));
+    result = result.replace(
+        "{dayOrdinal}",
+        &format!("{}{}", day_num, ordinal_suffix(day_num)),
+    );
     result = result.replace("{time}", &now.format("%H-%M-%S").to_string());
     result
 }
@@ -281,45 +633,73 @@ fn id_from_path(root: &Path, file_path: &Path, ignored: &[String]) -> Option<Str
     for comp in rel.parent().unwrap_or(Path::new("")).components() {
         if let std::path::Component::Normal(name) = comp {
             let s = name.to_str()?;
-            if EXCLUDED_DIRS.contains(&s) || ignored.iter().any(|d| d == s) { return None; }
+            if EXCLUDED_DIRS.contains(&s) || ignored.iter().any(|d| d == s) {
+                return None;
+            }
         }
     }
-    if file_path.extension()?.to_str()? != "md" { return None; }
+    if file_path.extension()?.to_str()? != "md" {
+        return None;
+    }
     let rel_str = rel.to_str()?;
-    let id = rel_str.strip_suffix(".md")?.replace(std::path::MAIN_SEPARATOR, "/");
-    if id.is_empty() { None } else { Some(id) }
+    let id = rel_str
+        .strip_suffix(".md")?
+        .replace(std::path::MAIN_SEPARATOR, "/");
+    if id.is_empty() {
+        None
+    } else {
+        Some(id)
+    }
 }
 
 fn abs_path_from_id(root: &Path, id: &str) -> Result<PathBuf, String> {
-    if id.contains('\\') { return Err("Invalid note ID".to_string()); }
+    if id.contains('\\') {
+        return Err("Invalid note ID".to_string());
+    }
     let rel = Path::new(id);
     for comp in rel.components() {
         match comp {
             std::path::Component::ParentDir => return Err("Path traversal".to_string()),
             std::path::Component::CurDir => return Err("Invalid path".to_string()),
-            std::path::Component::RootDir | std::path::Component::Prefix(_) => return Err("Absolute path".to_string()),
+            std::path::Component::RootDir | std::path::Component::Prefix(_) => {
+                return Err("Absolute path".to_string())
+            }
             _ => {}
         }
     }
     let mut path = root.join(rel).into_os_string();
     path.push(".md");
     let path = PathBuf::from(path);
-    if !path.starts_with(root) { return Err("Path escapes root".to_string()); }
+    if !path.starts_with(root) {
+        return Err("Path escapes root".to_string());
+    }
     Ok(path)
 }
 
 fn extract_title_from_id(id: &str) -> String {
     let filename = id.rsplit('/').next().unwrap_or(id);
     let title = filename.replace(['-', '_'], " ");
-    title.split_whitespace().map(|word| {
-        let mut chars = word.chars();
-        match chars.next() { None => String::new(), Some(first) => first.to_uppercase().to_string() + chars.as_str() }
-    }).collect::<Vec<_>>().join(" ")
+    title
+        .split_whitespace()
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                None => String::new(),
+                Some(first) => first.to_uppercase().to_string() + chars.as_str(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn get_notes_folder_path(state: &State<AppState>) -> Result<PathBuf, String> {
-    let folder = state.app_config.read().map_err(|e| e.to_string())?
-        .notes_folder.clone().ok_or("Notes folder not set".to_string())?;
+    let folder = state
+        .app_config
+        .read()
+        .map_err(|e| e.to_string())?
+        .notes_folder
+        .clone()
+        .ok_or("Notes folder not set".to_string())?;
     Ok(PathBuf::from(&folder))
 }
 
@@ -339,7 +719,9 @@ fn validate_preview_path(path: &str) -> Result<PathBuf, String> {
         Some(ext) if ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown") => {}
         _ => return Err("Only .md and .markdown files are allowed".to_string()),
     }
-    let canonical = file_path.canonicalize().map_err(|e| format!("Cannot resolve file path: {}", e))?;
+    let canonical = file_path
+        .canonicalize()
+        .map_err(|e| format!("Cannot resolve file path: {}", e))?;
     Ok(canonical)
 }
 
@@ -358,16 +740,20 @@ fn create_preview_window(app: &tauri::AppHandle, file_path: &str) -> Result<(), 
         return Ok(());
     }
     let filename = PathBuf::from(file_path)
-        .file_name().map(|n| n.to_string_lossy().into_owned())
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "Preview".to_string());
     // Use index.html to avoid 404/blank page when resolving route in production
-    let builder = tauri::WebviewWindowBuilder::new(app, &label, tauri::WebviewUrl::App("index.html".into()))
-        .title(format!("{} \u{2014} Aoroza", filename))
-        .inner_size(800.0, 600.0)
-        .min_inner_size(400.0, 300.0)
-        .resizable(true)
-        .decorations(true);
-    let window = builder.build().map_err(|e| format!("Failed to create preview window: {}", e))?;
+    let builder =
+        tauri::WebviewWindowBuilder::new(app, &label, tauri::WebviewUrl::App("index.html".into()))
+            .title(format!("{} \u{2014} Aoroza", filename))
+            .inner_size(800.0, 600.0)
+            .min_inner_size(400.0, 300.0)
+            .resizable(true)
+            .decorations(true);
+    let window = builder
+        .build()
+        .map_err(|e| format!("Failed to create preview window: {}", e))?;
     // Open devtools automatically for debugging only
     #[cfg(debug_assertions)]
     let _ = window.open_devtools();
@@ -388,39 +774,85 @@ fn get_notes_folder(state: State<AppState>) -> Option<String> {
 
 #[tauri::command]
 fn set_notes_folder(path: String, state: State<AppState>) -> Result<(), String> {
-    { let mut c = state.app_config.write().map_err(|e| e.to_string())?; c.notes_folder = Some(path); }
+    {
+        let mut c = state.app_config.write().map_err(|e| e.to_string())?;
+        c.notes_folder = Some(path);
+    }
     let c = state.app_config.read().map_err(|e| e.to_string())?;
     save_config(&*c)
 }
 
 #[tauri::command]
 fn get_settings(state: State<AppState>) -> Settings {
-    state.app_config.read().ok().and_then(|c| c.settings.clone()).unwrap_or_default()
+    state
+        .app_config
+        .read()
+        .ok()
+        .and_then(|c| c.settings.clone())
+        .unwrap_or_default()
 }
 
 #[tauri::command]
 fn update_settings(new_settings: Settings, state: State<AppState>) -> Result<(), String> {
-    { let mut c = state.app_config.write().map_err(|e| e.to_string())?; c.settings = Some(new_settings); }
+    {
+        let mut c = state.app_config.write().map_err(|e| e.to_string())?;
+        c.settings = Some(new_settings);
+    }
     let c = state.app_config.read().map_err(|e| e.to_string())?;
     save_config(&*c)
 }
 
 #[tauri::command]
+fn list_theme_schemas() -> Result<Vec<ThemeSchema>, String> {
+    Ok(refresh_theme_css_file()?.0)
+}
+
+#[tauri::command]
+fn load_theme_css() -> Result<String, String> {
+    Ok(refresh_theme_css_file()?.1)
+}
+
+#[tauri::command]
 fn list_notes(state: State<AppState>) -> Result<Vec<NoteMetadata>, String> {
     let path = get_notes_folder_path(&state)?;
-    if !path.exists() { return Ok(vec![]); }
-    let settings = state.app_config.read().map_err(|e| e.to_string())?.settings.clone().unwrap_or_default();
+    if !path.exists() {
+        return Ok(vec![]);
+    }
+    let settings = state
+        .app_config
+        .read()
+        .map_err(|e| e.to_string())?
+        .settings
+        .clone()
+        .unwrap_or_default();
     let ignored = get_effective_ignored_dirs(&settings);
 
     let mut notes = Vec::new();
-    for entry in WalkDir::new(&path).max_depth(10).into_iter().filter_entry(|e| is_visible_entry(e, &ignored)).flatten() {
+    for entry in WalkDir::new(&path)
+        .max_depth(10)
+        .into_iter()
+        .filter_entry(|e| is_visible_entry(e, &ignored))
+        .flatten()
+    {
         let fp = entry.path();
-        if !fp.is_file() { continue; }
+        if !fp.is_file() {
+            continue;
+        }
         if let Some(id) = id_from_path(&path, fp, &ignored) {
             if let Ok(content) = std::fs::read_to_string(fp) {
-                let modified = entry.metadata().ok().and_then(|m| m.modified().ok())
-                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs() as i64).unwrap_or(0);
-                notes.push(NoteMetadata { id, title: extract_title(&content), preview: generate_preview(&content), modified });
+                let modified = entry
+                    .metadata()
+                    .ok()
+                    .and_then(|m| m.modified().ok())
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
+                notes.push(NoteMetadata {
+                    id,
+                    title: extract_title(&content),
+                    preview: generate_preview(&content),
+                    modified,
+                });
             }
         }
     }
@@ -432,11 +864,23 @@ fn list_notes(state: State<AppState>) -> Result<Vec<NoteMetadata>, String> {
 fn read_note(id: String, state: State<AppState>) -> Result<Note, String> {
     let folder = get_notes_folder_path(&state)?;
     let file_path = abs_path_from_id(&folder, &id)?;
-    if !file_path.exists() { return Err("Note not found".to_string()); }
+    if !file_path.exists() {
+        return Err("Note not found".to_string());
+    }
     let content = std::fs::read_to_string(&file_path).map_err(|e| e.to_string())?;
-    let modified = std::fs::metadata(&file_path).ok().and_then(|m| m.modified().ok())
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs() as i64).unwrap_or(0);
-    Ok(Note { id, title: extract_title(&content), content, path: file_path.to_string_lossy().into_owned(), modified })
+    let modified = std::fs::metadata(&file_path)
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    Ok(Note {
+        id,
+        title: extract_title(&content),
+        content,
+        path: file_path.to_string_lossy().into_owned(),
+        modified,
+    })
 }
 
 #[tauri::command]
@@ -453,7 +897,10 @@ fn save_note(id: Option<String>, content: String, state: State<AppState>) -> Res
         let leaf = sanitize_filename(&title);
         let mut new_id = leaf.clone();
         let mut c = 1;
-        while abs_path_from_id(&folder, &new_id).map(|p| p.exists()).unwrap_or(false) {
+        while abs_path_from_id(&folder, &new_id)
+            .map(|p| p.exists())
+            .unwrap_or(false)
+        {
             new_id = format!("{}-{}", leaf, c);
             c += 1;
         }
@@ -467,44 +914,94 @@ fn save_note(id: Option<String>, content: String, state: State<AppState>) -> Res
     }
     std::fs::write(&file_path, &content).map_err(|e| e.to_string())?;
 
-    let modified = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
-    Ok(Note { id: final_id, title, content, path: file_path.to_string_lossy().into_owned(), modified })
+    let modified = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    Ok(Note {
+        id: final_id,
+        title,
+        content,
+        path: file_path.to_string_lossy().into_owned(),
+        modified,
+    })
 }
 
 #[tauri::command]
 fn create_note(target_folder: Option<String>, state: State<AppState>) -> Result<Note, String> {
     let folder = get_notes_folder_path(&state)?;
-    let base = if let Some(ref f) = target_folder { if f.is_empty() { "Untitled".to_string() } else { format!("{}/Untitled", f.trim_end_matches('/')) } } else { "Untitled".to_string() };
-    let mut final_id = base.clone(); let mut c = 1;
-    while abs_path_from_id(&folder, &final_id).map(|p| p.exists()).unwrap_or(false) { c += 1; final_id = format!("{}-{}", base, c); }
+    let base = if let Some(ref f) = target_folder {
+        if f.is_empty() {
+            "Untitled".to_string()
+        } else {
+            format!("{}/Untitled", f.trim_end_matches('/'))
+        }
+    } else {
+        "Untitled".to_string()
+    };
+    let mut final_id = base.clone();
+    let mut c = 1;
+    while abs_path_from_id(&folder, &final_id)
+        .map(|p| p.exists())
+        .unwrap_or(false)
+    {
+        c += 1;
+        final_id = format!("{}-{}", base, c);
+    }
     let display_title = extract_title_from_id(&final_id);
     let content = format!("# {}\n\n", display_title);
     let file_path = abs_path_from_id(&folder, &final_id)?;
-    if let Some(parent) = file_path.parent() { std::fs::create_dir_all(parent).map_err(|e| e.to_string())?; }
+    if let Some(parent) = file_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
     std::fs::write(&file_path, &content).map_err(|e| e.to_string())?;
-    let modified = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
-    Ok(Note { id: final_id, title: display_title, content, path: file_path.to_string_lossy().into_owned(), modified })
+    let modified = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    Ok(Note {
+        id: final_id,
+        title: display_title,
+        content,
+        path: file_path.to_string_lossy().into_owned(),
+        modified,
+    })
 }
 
 #[tauri::command]
 fn delete_note(id: String, state: State<AppState>) -> Result<(), String> {
     let folder = get_notes_folder_path(&state)?;
     let file_path = abs_path_from_id(&folder, &id)?;
-    if file_path.exists() { std::fs::remove_file(&file_path).map_err(|e| e.to_string())?; }
+    if file_path.exists() {
+        std::fs::remove_file(&file_path).map_err(|e| e.to_string())?;
+    }
     Ok(())
 }
 
 #[tauri::command]
 fn list_folders(state: State<AppState>) -> Result<Vec<String>, String> {
     let folder = get_notes_folder_path(&state)?;
-    let settings = state.app_config.read().map_err(|e| e.to_string())?.settings.clone().unwrap_or_default();
+    let settings = state
+        .app_config
+        .read()
+        .map_err(|e| e.to_string())?
+        .settings
+        .clone()
+        .unwrap_or_default();
     let ignored = get_effective_ignored_dirs(&settings);
     let mut dirs = Vec::new();
-    for entry in WalkDir::new(&folder).max_depth(10).into_iter().filter_entry(|e| is_visible_entry(e, &ignored)).flatten() {
+    for entry in WalkDir::new(&folder)
+        .max_depth(10)
+        .into_iter()
+        .filter_entry(|e| is_visible_entry(e, &ignored))
+        .flatten()
+    {
         if entry.file_type().is_dir() && entry.path() != folder {
             if let Ok(rel) = entry.path().strip_prefix(&folder) {
                 let s = rel.to_string_lossy().replace('\\', "/");
-                if !s.is_empty() { dirs.push(s); }
+                if !s.is_empty() {
+                    dirs.push(s);
+                }
             }
         }
     }
@@ -516,7 +1013,9 @@ fn list_folders(state: State<AppState>) -> Result<Vec<String>, String> {
 fn create_folder(path: String, state: State<AppState>) -> Result<(), String> {
     let folder = get_notes_folder_path(&state)?;
     let target = folder.join(path.replace('/', std::path::MAIN_SEPARATOR_STR));
-    if !target.starts_with(&folder) { return Err("Invalid path".to_string()); }
+    if !target.starts_with(&folder) {
+        return Err("Invalid path".to_string());
+    }
     std::fs::create_dir_all(&target).map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -525,8 +1024,12 @@ fn create_folder(path: String, state: State<AppState>) -> Result<(), String> {
 fn delete_folder(path: String, state: State<AppState>) -> Result<(), String> {
     let folder = get_notes_folder_path(&state)?;
     let target = folder.join(path.replace('/', std::path::MAIN_SEPARATOR_STR));
-    if !target.starts_with(&folder) { return Err("Invalid path".to_string()); }
-    if !target.is_dir() { return Err("Not a directory".to_string()); }
+    if !target.starts_with(&folder) {
+        return Err("Invalid path".to_string());
+    }
+    if !target.is_dir() {
+        return Err("Not a directory".to_string());
+    }
     std::fs::remove_dir_all(&target).map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -534,12 +1037,21 @@ fn delete_folder(path: String, state: State<AppState>) -> Result<(), String> {
 #[tauri::command]
 fn rename_folder(old_path: String, new_name: String, state: State<AppState>) -> Result<(), String> {
     let folder = get_notes_folder_path(&state)?;
-    let sanitized = new_name.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "-").trim().to_string();
-    if sanitized.is_empty() { return Err("Name cannot be empty".to_string()); }
+    let sanitized = new_name
+        .replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "-")
+        .trim()
+        .to_string();
+    if sanitized.is_empty() {
+        return Err("Name cannot be empty".to_string());
+    }
     let old = folder.join(old_path.replace('/', std::path::MAIN_SEPARATOR_STR));
-    if !old.starts_with(&folder) || !old.is_dir() { return Err("Invalid path".to_string()); }
+    if !old.starts_with(&folder) || !old.is_dir() {
+        return Err("Invalid path".to_string());
+    }
     let new = old.parent().ok_or("No parent")?.join(&sanitized);
-    if new.exists() { return Err("Folder already exists".to_string()); }
+    if new.exists() {
+        return Err("Folder already exists".to_string());
+    }
     std::fs::rename(&old, &new).map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -547,31 +1059,52 @@ fn rename_folder(old_path: String, new_name: String, state: State<AppState>) -> 
 #[tauri::command]
 fn rename_note(old_id: String, new_name: String, state: State<AppState>) -> Result<String, String> {
     let folder = get_notes_folder_path(&state)?;
-    let sanitized: String = new_name.chars()
+    let sanitized: String = new_name
+        .chars()
         .filter(|c| *c != '\u{00A0}' && *c != '\u{FEFF}')
-        .map(|c| match c { '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '-', _ => c })
+        .map(|c| match c {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '-',
+            _ => c,
+        })
         .collect();
     let trimmed = sanitized.trim().to_string();
-    if trimmed.is_empty() { return Err("Name cannot be empty".to_string()); }
+    if trimmed.is_empty() {
+        return Err("Name cannot be empty".to_string());
+    }
 
     let source = abs_path_from_id(&folder, &old_id)?;
-    if !source.exists() { return Err("Note not found".to_string()); }
+    if !source.exists() {
+        return Err("Note not found".to_string());
+    }
 
     // Preserve folder path, replace leaf with new name
     let leaf = old_id.rsplit('/').next().unwrap_or(&old_id);
     let parent = old_id.trim_end_matches(leaf).trim_end_matches('/');
-    let new_id = if parent.is_empty() { trimmed.clone() } else { format!("{}/{}", parent, trimmed) };
+    let new_id = if parent.is_empty() {
+        trimmed.clone()
+    } else {
+        format!("{}/{}", parent, trimmed)
+    };
 
     // Check for conflicts and add suffix if needed
     let mut final_id = new_id.clone();
     let mut c = 1;
-    while abs_path_from_id(&folder, &final_id).map(|p| p.exists()).unwrap_or(false) {
-        final_id = if parent.is_empty() { format!("{}-{}", trimmed, c) } else { format!("{}/{}-{}", parent, trimmed, c) };
+    while abs_path_from_id(&folder, &final_id)
+        .map(|p| p.exists())
+        .unwrap_or(false)
+    {
+        final_id = if parent.is_empty() {
+            format!("{}-{}", trimmed, c)
+        } else {
+            format!("{}/{}-{}", parent, trimmed, c)
+        };
         c += 1;
     }
 
     let dest = abs_path_from_id(&folder, &final_id)?;
-    if let Some(parent_dir) = dest.parent() { std::fs::create_dir_all(parent_dir).map_err(|e| e.to_string())?; }
+    if let Some(parent_dir) = dest.parent() {
+        std::fs::create_dir_all(parent_dir).map_err(|e| e.to_string())?;
+    }
     std::fs::rename(&source, &dest).map_err(|e| e.to_string())?;
 
     // Update H1 heading in content to match new name
@@ -587,12 +1120,22 @@ fn rename_note(old_id: String, new_name: String, state: State<AppState>) -> Resu
 fn move_note(id: String, target_folder: String, state: State<AppState>) -> Result<String, String> {
     let folder = get_notes_folder_path(&state)?;
     let source_path = abs_path_from_id(&folder, &id)?;
-    if !source_path.exists() { return Err("Note not found".to_string()); }
+    if !source_path.exists() {
+        return Err("Note not found".to_string());
+    }
     let leaf = id.rsplit('/').next().unwrap_or(&id);
-    let new_id = if target_folder.is_empty() { leaf.to_string() } else { format!("{}/{}", target_folder, leaf) };
+    let new_id = if target_folder.is_empty() {
+        leaf.to_string()
+    } else {
+        format!("{}/{}", target_folder, leaf)
+    };
     let dest = abs_path_from_id(&folder, &new_id)?;
-    if let Some(parent) = dest.parent() { std::fs::create_dir_all(parent).map_err(|e| e.to_string())?; }
-    if dest.exists() { return Err("A note with that name already exists".to_string()); }
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    if dest.exists() {
+        return Err("A note with that name already exists".to_string());
+    }
     std::fs::rename(&source_path, &dest).map_err(|e| e.to_string())?;
     Ok(new_id)
 }
@@ -601,12 +1144,30 @@ fn move_note(id: String, target_folder: String, state: State<AppState>) -> Resul
 fn move_folder(path: String, target_parent: String, state: State<AppState>) -> Result<(), String> {
     let folder = get_notes_folder_path(&state)?;
     let source = folder.join(path.replace('/', std::path::MAIN_SEPARATOR_STR));
-    if !source.is_dir() { return Err("Source is not a directory".to_string()); }
-    let name = source.file_name().ok_or("No name")?.to_string_lossy().to_string();
-    let dest = if target_parent.is_empty() { folder.join(&name) } else { folder.join(target_parent.replace('/', std::path::MAIN_SEPARATOR_STR)).join(&name) };
-    if dest.starts_with(&source) { return Err("Cannot move into itself".to_string()); }
-    if dest.exists() { return Err("Folder already exists".to_string()); }
-    if let Some(parent) = dest.parent() { std::fs::create_dir_all(parent).map_err(|e| e.to_string())?; }
+    if !source.is_dir() {
+        return Err("Source is not a directory".to_string());
+    }
+    let name = source
+        .file_name()
+        .ok_or("No name")?
+        .to_string_lossy()
+        .to_string();
+    let dest = if target_parent.is_empty() {
+        folder.join(&name)
+    } else {
+        folder
+            .join(target_parent.replace('/', std::path::MAIN_SEPARATOR_STR))
+            .join(&name)
+    };
+    if dest.starts_with(&source) {
+        return Err("Cannot move into itself".to_string());
+    }
+    if dest.exists() {
+        return Err("Folder already exists".to_string());
+    }
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
     std::fs::rename(&source, &dest).map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -629,7 +1190,9 @@ fn get_default_ignored_patterns() -> Vec<String> {
 
 #[tauri::command]
 fn copy_to_clipboard(app: tauri::AppHandle, text: String) -> Result<(), String> {
-    app.clipboard().write_text(text.clone()).map_err(|e| format!("{}", e))?;
+    app.clipboard()
+        .write_text(text.clone())
+        .map_err(|e| format!("{}", e))?;
     Ok(())
 }
 
@@ -677,27 +1240,50 @@ async fn open_in_file_manager(path: String) -> Result<(), String> {
 #[tauri::command]
 fn read_file_direct(path: String) -> Result<FileContent, String> {
     let canonical = validate_preview_path(&path)?;
-    if !canonical.is_file() { return Err(format!("Not a file: {}", path)); }
-    let content = std::fs::read_to_string(&canonical).map_err(|_| "Failed to read file".to_string())?;
-    let metadata = std::fs::metadata(&canonical).map_err(|_| "Failed to read metadata".to_string())?;
-    let modified = metadata.modified().ok()
+    if !canonical.is_file() {
+        return Err(format!("Not a file: {}", path));
+    }
+    let content =
+        std::fs::read_to_string(&canonical).map_err(|_| "Failed to read file".to_string())?;
+    let metadata =
+        std::fs::metadata(&canonical).map_err(|_| "Failed to read metadata".to_string())?;
+    let modified = metadata
+        .modified()
+        .ok()
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs() as i64).unwrap_or(0);
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
     let title = extract_title(&content);
-    Ok(FileContent { path, content, title, modified })
+    Ok(FileContent {
+        path,
+        content,
+        title,
+        modified,
+    })
 }
 
 #[tauri::command]
 fn save_file_direct(path: String, content: String) -> Result<FileContent, String> {
     let canonical = validate_preview_path(&path)?;
-    if !canonical.is_file() { return Err(format!("Not a file: {}", path)); }
+    if !canonical.is_file() {
+        return Err(format!("Not a file: {}", path));
+    }
     std::fs::write(&canonical, &content).map_err(|_| "Failed to write file".to_string())?;
-    let metadata = std::fs::metadata(&canonical).map_err(|_| "Failed to read metadata".to_string())?;
-    let modified = metadata.modified().ok()
+    let metadata =
+        std::fs::metadata(&canonical).map_err(|_| "Failed to read metadata".to_string())?;
+    let modified = metadata
+        .modified()
+        .ok()
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs() as i64).unwrap_or(0);
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
     let title = extract_title(&content);
-    Ok(FileContent { path, content, title, modified })
+    Ok(FileContent {
+        path,
+        content,
+        title,
+        modified,
+    })
 }
 
 #[tauri::command]
@@ -707,33 +1293,55 @@ fn import_file_to_folder(
     state: tauri::State<'_, AppState>,
 ) -> Result<NoteMetadata, String> {
     let source = validate_preview_path(&path)?;
-    if !source.is_file() { return Err(format!("Not a file: {}", path)); }
+    if !source.is_file() {
+        return Err(format!("Not a file: {}", path));
+    }
     let folder = {
         let app_config = state.app_config.read().map_err(|e| e.to_string())?;
-        app_config.notes_folder.clone().ok_or("Notes folder not set".to_string())?
+        app_config
+            .notes_folder
+            .clone()
+            .ok_or("Notes folder not set".to_string())?
     };
     let folder_path = PathBuf::from(&folder);
-    let content = std::fs::read_to_string(&source).map_err(|_| "Failed to read source file".to_string())?;
+    let content =
+        std::fs::read_to_string(&source).map_err(|_| "Failed to read source file".to_string())?;
     let extracted_title = extract_title(&content);
     let base_name = if extracted_title.trim().is_empty() {
-        source.file_stem().and_then(|s| s.to_str()).unwrap_or("Untitled").to_string()
+        source
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("Untitled")
+            .to_string()
     } else {
         sanitize_filename(&extracted_title)
     };
     let mut final_id = base_name.clone();
     let mut counter = 1;
-    while abs_path_from_id(&folder_path, &final_id).map(|p| p.exists()).unwrap_or(false) {
+    while abs_path_from_id(&folder_path, &final_id)
+        .map(|p| p.exists())
+        .unwrap_or(false)
+    {
         final_id = format!("{}-{}", base_name, counter);
         counter += 1;
     }
     let dest = abs_path_from_id(&folder_path, &final_id)?;
-    if let Some(parent) = dest.parent() { std::fs::create_dir_all(parent).map_err(|e| e.to_string())?; }
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
     std::fs::copy(&source, &dest).map_err(|_| "Failed to copy file".to_string())?;
-    let modified = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64).unwrap_or(0);
+    let modified = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
     let title = extract_title(&content);
     let preview = generate_preview(&content);
-    let note = NoteMetadata { id: final_id, title, preview, modified };
+    let note = NoteMetadata {
+        id: final_id,
+        title,
+        preview,
+        modified,
+    };
     let note_id = note.id.clone();
     let _ = app.emit("select-note", &note_id);
     if let Some(main_window) = app.get_webview_window("main") {
@@ -746,11 +1354,17 @@ fn import_file_to_folder(
 #[tauri::command]
 fn open_file_preview(app: tauri::AppHandle, path: String) -> Result<(), String> {
     let file_path = PathBuf::from(&path);
-    if !file_path.exists() { return Err(format!("File not found: {}", path)); }
+    if !file_path.exists() {
+        return Err(format!("File not found: {}", path));
+    }
     // Store the preview file path mapped to the window label
     if let Some(state) = app.try_state::<AppState>() {
         let label = get_preview_window_label(&path);
-        state.preview_file_paths.write().unwrap().insert(label, path.clone());
+        state
+            .preview_file_paths
+            .write()
+            .unwrap()
+            .insert(label, path.clone());
     }
     create_preview_window(&app, &path)?;
     Ok(())
@@ -764,10 +1378,10 @@ fn get_preview_file(window: tauri::Window, state: State<'_, AppState>) -> Option
 
 #[tauri::command]
 fn start_file_watcher(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-    use notify::{Watcher, RecursiveMode};
+    use notify::{RecursiveMode, Watcher};
 
     let folder = get_notes_folder_path(&state)?;
-    
+
     // Check if we are already watching this folder
     {
         let watcher_guard = state.watcher.read().map_err(|e| e.to_string())?;
@@ -785,46 +1399,57 @@ fn start_file_watcher(app: tauri::AppHandle, state: State<'_, AppState>) -> Resu
     }
 
     // Build the list of ignored directories to be captured by the closure
-    let settings = state.app_config.read().ok().and_then(|c| c.settings.clone()).unwrap_or_default();
+    let settings = state
+        .app_config
+        .read()
+        .ok()
+        .and_then(|c| c.settings.clone())
+        .unwrap_or_default();
     let ignored_dirs = get_effective_ignored_dirs(&settings);
     let folder_clone = folder.clone();
     let app_clone = app.clone();
 
     // Create watcher
-    let mut watcher = notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
-        if let Ok(event) = res {
-            // Check if any of the affected paths are Markdown files or directories, and not in ignored paths
-            let has_valid_changes = event.paths.iter().any(|p| {
-                if let Ok(rel) = p.strip_prefix(&folder_clone) {
-                    for comp in rel.components() {
-                        if let std::path::Component::Normal(name) = comp {
-                            if let Some(s) = name.to_str() {
-                                if EXCLUDED_DIRS.contains(&s) || ignored_dirs.iter().any(|d| d == s) {
-                                    return false;
+    let mut watcher =
+        notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
+            if let Ok(event) = res {
+                // Check if any of the affected paths are Markdown files or directories, and not in ignored paths
+                let has_valid_changes = event.paths.iter().any(|p| {
+                    if let Ok(rel) = p.strip_prefix(&folder_clone) {
+                        for comp in rel.components() {
+                            if let std::path::Component::Normal(name) = comp {
+                                if let Some(s) = name.to_str() {
+                                    if EXCLUDED_DIRS.contains(&s)
+                                        || ignored_dirs.iter().any(|d| d == s)
+                                    {
+                                        return false;
+                                    }
                                 }
                             }
                         }
+                        // Filter: if path has an extension, it must be "md"
+                        let has_extension = p.extension().is_some();
+                        if has_extension && p.extension().and_then(|e| e.to_str()) != Some("md") {
+                            return false;
+                        }
+                        true
+                    } else {
+                        false
                     }
-                    // Filter: if path has an extension, it must be "md"
-                    let has_extension = p.extension().is_some();
-                    if has_extension && p.extension().and_then(|e| e.to_str()) != Some("md") {
-                        return false;
-                    }
-                    true
-                } else {
-                    false
-                }
-            });
+                });
 
-            if has_valid_changes {
-                // Emit event to all webviews
-                let _ = app_clone.emit("file-changed", ());
+                if has_valid_changes {
+                    // Emit event to all webviews
+                    let _ = app_clone.emit("file-changed", ());
+                }
             }
-        }
-    }).map_err(|e| e.to_string())?;
+        })
+        .map_err(|e| e.to_string())?;
 
     // Start watching
-    watcher.watch(&folder, RecursiveMode::Recursive).map_err(|e| e.to_string())?;
+    watcher
+        .watch(&folder, RecursiveMode::Recursive)
+        .map_err(|e| e.to_string())?;
 
     // Store the watcher
     {
@@ -857,7 +1482,11 @@ pub fn run() {
                         let path_str = path.to_string_lossy().into_owned();
                         let label = get_preview_window_label(&path_str);
                         if let Some(state) = app.try_state::<AppState>() {
-                            state.preview_file_paths.write().unwrap().insert(label, path_str.clone());
+                            state
+                                .preview_file_paths
+                                .write()
+                                .unwrap()
+                                .insert(label, path_str.clone());
                         }
                         let _ = create_preview_window(app, &path_str);
                         return;
@@ -884,7 +1513,11 @@ pub fn run() {
                         let path_str = path.to_string_lossy().into_owned();
                         let label = get_preview_window_label(&path_str);
                         if let Some(state) = app.try_state::<AppState>() {
-                            state.preview_file_paths.write().unwrap().insert(label, path_str.clone());
+                            state
+                                .preview_file_paths
+                                .write()
+                                .unwrap()
+                                .insert(label, path_str.clone());
                         }
                         let _ = create_preview_window(app.handle(), &path_str);
                         has_file_arg = true;
@@ -901,15 +1534,35 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            get_notes_folder, set_notes_folder,
-            get_settings, update_settings,
-            list_notes, read_note, save_note, create_note, delete_note,
-            list_folders, create_folder, delete_folder, rename_folder, rename_note,
-            move_note, move_folder,
-            preview_note_name, get_default_ignored_patterns,
-            open_folder_dialog, open_in_file_manager, copy_to_clipboard,
-            read_file_direct, save_file_direct, import_file_to_folder,
-            open_file_preview, get_preview_file, start_file_watcher,
+            get_notes_folder,
+            set_notes_folder,
+            get_settings,
+            update_settings,
+            list_theme_schemas,
+            load_theme_css,
+            list_notes,
+            read_note,
+            save_note,
+            create_note,
+            delete_note,
+            list_folders,
+            create_folder,
+            delete_folder,
+            rename_folder,
+            rename_note,
+            move_note,
+            move_folder,
+            preview_note_name,
+            get_default_ignored_patterns,
+            open_folder_dialog,
+            open_in_file_manager,
+            copy_to_clipboard,
+            read_file_direct,
+            save_file_direct,
+            import_file_to_folder,
+            open_file_preview,
+            get_preview_file,
+            start_file_watcher,
             write_file,
         ])
         .run(tauri::generate_context!())

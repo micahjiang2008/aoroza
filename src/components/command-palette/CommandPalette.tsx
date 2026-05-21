@@ -300,15 +300,6 @@ export function CommandPalette({
           onClose();
         },
       },
-      {
-        id: "theme-system",
-        label: "Switch Theme to System Mode",
-        icon: <SwatchIcon className="w-4.5 h-4.5 stroke-[1.5]" />,
-        action: () => {
-          setTheme("system");
-          onClose();
-        },
-      },
     );
 
     return baseCommands;

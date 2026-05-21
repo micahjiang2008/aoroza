@@ -28,6 +28,14 @@ export function PlusIcon({ className = "w-4.5 h-4.5" }: IconProps) {
   );
 }
 
+export function MaximizeIcon({ className = "w-4.5 h-4.5" }: IconProps) {
+  return (
+    <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M8 4h8a4 4 0 0 1 4 4v8a4 4 0 0 1 -4 4h-8a4 4 0 0 1 -4 -4v-8a4 4 0 0 1 4 -4z" />
+    </svg>
+  );
+}
+
 export function XIcon({ className = "w-4.5 h-4.5" }: IconProps) {
   return (
     <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">

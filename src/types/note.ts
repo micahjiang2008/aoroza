@@ -14,7 +14,14 @@ export interface Note {
 }
 
 export interface ThemeSettings {
-  mode: "light" | "dark" | "system";
+  mode: "light" | "dark";
+  colorSchema?: string;
+}
+
+export interface ThemeSchema {
+  name: string;
+  label: string;
+  mode: "light" | "dark";
 }
 
 export type FontFamily = "system-sans" | "serif" | "monospace";
@@ -27,19 +34,6 @@ export interface EditorFontSettings {
   boldWeight?: number;
   lineHeight?: number;
 }
-
-export type ThemeColorKey =
-  | "bg"
-  | "bg-secondary"
-  | "bg-muted"
-  | "bg-emphasis"
-  | "text"
-  | "text-muted"
-  | "border"
-  | "accent"
-  | "selection";
-
-export type CustomColors = Partial<Record<ThemeColorKey, string>>;
 
 export interface Settings {
   theme: ThemeSettings;
@@ -54,8 +48,6 @@ export interface Settings {
   interfaceZoom?: number;
   ollamaModel?: string;
   ignoredPatterns?: string[];
-  customColorsLight?: CustomColors;
-  customColorsDark?: CustomColors;
   customFonts?: string[];
 }
 

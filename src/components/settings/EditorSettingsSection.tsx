@@ -1,13 +1,10 @@
-import { useTheme, defaultThemeColors } from "../../context/ThemeContext";
+import { useTheme } from "../../context/ThemeContext";
 import { Button, CodeCopyButton, IconButton, Input, Select } from "../ui";
-import { ColorPicker } from "../ui/ColorPicker";
 import type {
   TextDirection,
   EditorWidth,
-  ThemeColorKey,
 } from "../../types/note";
-import { ChevronRightIcon, EyeIcon, MinusIcon, PlusIcon } from "../icons";
-import { cn } from "../../lib/utils";
+import { EyeIcon, MinusIcon, PlusIcon, RefreshCwIcon } from "../icons";
 
 function resolvePreviewFontFamily(font: string): string {
   const builtInFonts: Record<string, string> = {
@@ -19,18 +16,6 @@ function resolvePreviewFontFamily(font: string): string {
   };
   return builtInFonts[font] ?? font;
 }
-
-const colorLabels: { key: ThemeColorKey; label: string; group: string }[] = [
-  { key: "bg", label: "Background", group: "Surfaces" },
-  { key: "bg-secondary", label: "Sidebar", group: "Surfaces" },
-  { key: "bg-muted", label: "Hover & Subtle Fill", group: "Surfaces" },
-  { key: "bg-emphasis", label: "Strong Fill", group: "Surfaces" },
-  { key: "text", label: "Text", group: "Text & UI" },
-  { key: "text-muted", label: "Secondary Text", group: "Text & UI" },
-  { key: "accent", label: "Primary & Buttons", group: "Text & UI" },
-  { key: "border", label: "Borders", group: "Text & UI" },
-  { key: "selection", label: "Selection Highlight", group: "Text & UI" },
-];
 
 const textDirectionOptions: { value: TextDirection; label: string }[] = [
   { value: "auto", label: "Auto" },
@@ -56,8 +41,11 @@ const boldWeightOptions = [
 export function AppearanceSettingsSection() {
   const {
     theme,
-    resolvedTheme,
     setTheme,
+    colorSchema,
+    setColorSchema,
+    availableColorSchemas,
+    reloadThemeCss,
     editorFontSettings,
     setEditorFontSetting,
     resetEditorFontSettings,
@@ -69,11 +57,6 @@ export function AppearanceSettingsSection() {
     setInterfaceZoom,
     customEditorWidthPx,
     setCustomEditorWidthPx,
-    customColorsLight,
-    customColorsDark,
-    setCustomColor,
-    resetCustomColor,
-    resetAllCustomColors,
     getAvailableFonts,
   } = useTheme();
 
@@ -116,7 +99,7 @@ export function AppearanceSettingsSection() {
       <section className="pb-2">
         <h2 className="text-xl font-medium mb-3">Theme</h2>
         <div className="flex gap-2 p-1 rounded-[10px] border border-border">
-          {(["light", "dark", "system"] as const).map((mode) => (
+          {(["light", "dark"] as const).map((mode) => (
             <Button
               key={mode}
               onClick={() => setTheme(mode)}
@@ -128,44 +111,42 @@ export function AppearanceSettingsSection() {
             </Button>
           ))}
         </div>
-        {theme === "system" && (
-          <p className="mt-3 text-sm text-text-muted">
-            Currently using {resolvedTheme} mode based on system preference
-          </p>
-        )}
 
-        {theme === "system" ? (
-          <div className="mt-4 space-y-2">
-            <ColorsExpandable
-              label="Customize light colors"
-              mode="light"
-              customColors={customColorsLight}
-              setCustomColor={setCustomColor}
-              resetCustomColor={resetCustomColor}
-              resetAllCustomColors={resetAllCustomColors}
-            />
-            <ColorsExpandable
-              label="Customize dark colors"
-              mode="dark"
-              customColors={customColorsDark}
-              setCustomColor={setCustomColor}
-              resetCustomColor={resetCustomColor}
-              resetAllCustomColors={resetAllCustomColors}
-            />
+        <div className="mt-4 rounded-[10px] border border-border pl-4 py-3 pr-3">
+          <div className="flex items-center justify-between gap-4">
+            <label className="text-sm text-text font-medium">
+              Color schema
+            </label>
+            <div className="flex items-center gap-2 min-w-0">
+              <Select
+                value={colorSchema}
+                onChange={(e) => setColorSchema(e.target.value)}
+                className="w-64 max-w-full"
+                disabled={availableColorSchemas.length === 0}
+              >
+                {availableColorSchemas.length === 0 ? (
+                  <option value={colorSchema}>Default</option>
+                ) : (
+                  availableColorSchemas.map((schema) => (
+                    <option key={schema.name} value={schema.name}>
+                      {schema.label}
+                    </option>
+                  ))
+                )}
+              </Select>
+              <IconButton
+                onClick={() => { void reloadThemeCss(); }}
+                title="Refresh color schemas"
+                aria-label="Refresh color schemas"
+              >
+                <RefreshCwIcon className="w-4.5 h-4.5 stroke-[1.5]" />
+              </IconButton>
+            </div>
           </div>
-        ) : (
-          <ColorsExpandable
-            label="Customize colors"
-            mode={resolvedTheme}
-            customColors={
-              resolvedTheme === "dark" ? customColorsDark : customColorsLight
-            }
-            setCustomColor={setCustomColor}
-            resetCustomColor={resetCustomColor}
-            resetAllCustomColors={resetAllCustomColors}
-            className="mt-4"
-          />
-        )}
+          <p className="mt-2 text-xs text-text-muted">
+            Schemas are generated from D:\MYWORK\pi-desktop\docs\CodexColorSchema into ~/.aoroza/theme.css.
+          </p>
+        </div>
       </section>
 
       {/* Divider */}
@@ -445,83 +426,5 @@ export function AppearanceSettingsSection() {
         </div>
       </section>
     </div>
-  );
-}
-
-function ColorsExpandable({
-  label,
-  mode,
-  customColors,
-  setCustomColor,
-  resetCustomColor,
-  resetAllCustomColors,
-  className,
-}: {
-  label: string;
-  mode: "light" | "dark";
-  customColors: Partial<Record<ThemeColorKey, string>>;
-  setCustomColor: (
-    mode: "light" | "dark",
-    key: ThemeColorKey,
-    value: string,
-  ) => void;
-  resetCustomColor: (mode: "light" | "dark", key: ThemeColorKey) => void;
-  resetAllCustomColors: (mode: "light" | "dark") => void;
-  className?: string;
-}) {
-  const defaults = defaultThemeColors[mode];
-  const hasAnyCustom = Object.keys(customColors).length > 0;
-
-  return (
-    <details className={cn("text-sm", className)}>
-      <summary className="cursor-pointer text-text-muted hover:text-text select-none flex items-center gap-1 font-medium">
-        <ChevronRightIcon className="w-3.5 h-3.5 stroke-2 transition-transform [[open]>&]:rotate-90" />
-        {label}
-        {hasAnyCustom && (
-          <Button
-            onClick={(e) => {
-              e.preventDefault();
-              resetAllCustomColors(mode);
-            }}
-            variant="ghost"
-            size="sm"
-            className="ml-auto"
-          >
-            Reset all
-          </Button>
-        )}
-      </summary>
-      <div className="mt-2 rounded-[10px] border border-border pl-4 py-3 pr-3 space-y-1.5">
-        {(() => {
-          let lastGroup = "";
-          return colorLabels.map(({ key, label: colorLabel, group }) => {
-            const showGroup = group !== lastGroup;
-            lastGroup = group;
-            return (
-              <div key={key}>
-                {showGroup && (
-                  <div
-                    className={`text-base text-text-muted font-medium ${key !== colorLabels[0].key ? "mt-6" : ""} mb-2.5`}
-                  >
-                    {group}
-                  </div>
-                )}
-                <div className="flex items-center justify-between">
-                  <label className="text-sm text-text font-medium">
-                    {colorLabel}
-                  </label>
-                  <ColorPicker
-                    color={customColors[key] ?? defaults[key]}
-                    defaultColor={defaults[key]}
-                    onChange={(value) => setCustomColor(mode, key, value)}
-                    onReset={() => resetCustomColor(mode, key)}
-                  />
-                </div>
-              </div>
-            );
-          });
-        })()}
-      </div>
-    </details>
   );
 }

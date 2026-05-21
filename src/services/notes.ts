@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Note, NoteMetadata, Settings } from "../types/note";
+import type { Note, NoteMetadata, Settings, ThemeSchema } from "../types/note";
 
 export async function getNotesFolder(): Promise<string | null> {
   return invoke("get_notes_folder");
@@ -72,6 +72,14 @@ export async function getSettings(): Promise<Settings> {
 
 export async function updateSettings(settings: Settings): Promise<void> {
   return invoke("update_settings", { newSettings: settings });
+}
+
+export async function listThemeSchemas(): Promise<ThemeSchema[]> {
+  return invoke("list_theme_schemas");
+}
+
+export async function loadThemeCss(): Promise<string> {
+  return invoke("load_theme_css");
 }
 
 
