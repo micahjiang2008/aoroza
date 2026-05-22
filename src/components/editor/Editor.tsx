@@ -52,14 +52,6 @@ import {
 } from "../icons";
 import { Outline } from "./Outline";
 
-function formatDateTime(timestamp: number): string {
-  const date = new Date(timestamp * 1000);
-  return date.toLocaleDateString(undefined, {
-    weekday: "short", month: "short", day: "numeric",
-    year: "numeric", hour: "numeric", minute: "2-digit",
-  });
-}
-
 function normalizeUrl(url: string): string {
   const trimmed = url.trim();
   if (!trimmed) return trimmed;
@@ -171,7 +163,7 @@ export function Editor({
   const [copyMenuOpen, setCopyMenuOpen] = useState(false);
   const [tableMenuOpen, setTableMenuOpen] = useState(false);
   const [outlineVisible, setOutlineVisible] = useState(false);
-  const [statusBarVisible, setStatusBarVisible] = useState(true);
+  const [statusBarVisible, setStatusBarVisible] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const saveTimeoutRef = useRef<number | null>(null);
   const linkPopupRef = useRef<TippyInstance | null>(null);
@@ -803,29 +795,25 @@ export function Editor({
   return (
     <div className="flex-1 flex flex-col min-w-0 bg-bg relative">
       {/* Header */}
-      <div
-        className={cn(
-          "h-11 shrink-0 flex items-center justify-between px-3",
-          !sidebarVisible && "pl-22",
-        )}
-        data-tauri-drag-region
-      >
-        <div className="titlebar-no-drag flex items-center gap-1 min-w-0">
+      <div className="h-11 shrink-0 flex items-center px-3">
+        <div className="flex items-center gap-1 min-w-0">
           {onToggleSidebar && (
-            <IconButton onClick={onToggleSidebar}
-              title={sidebarVisible ? `Hide sidebar (${mod}${isMac ? "" : "+"}B)` : `Show sidebar (${mod}${isMac ? "" : "+"}B)`}
-              className="shrink-0">
-              <PanelLeftIcon className="w-4.5 h-4.5 stroke-[1.5]" />
-            </IconButton>
+            <Tooltip content={sidebarVisible ? `Hide sidebar (${mod}${isMac ? "" : "+"}B)` : `Show sidebar (${mod}${isMac ? "" : "+"}B)`}>
+              <IconButton onClick={onToggleSidebar} className="shrink-0">
+                <PanelLeftIcon className="w-4.5 h-4.5 stroke-[1.5]" />
+              </IconButton>
+            </Tooltip>
           )}
           {currentNote && (
-            <span className="text-xs text-text-muted mb-px truncate">
-              {formatDateTime(currentNote.modified)}
+            <span className="text-xs text-text-muted mb-px truncate" title={currentNote.path}>
+              {currentNote.path.split(/[/\\]/).pop()?.replace(/\.md$/i, "")}
             </span>
           )}
         </div>
 
-        <div className="titlebar-no-drag flex items-center gap-px shrink-0">
+        <div className="flex-1 min-w-0 self-stretch" data-tauri-drag-region />
+
+        <div className="flex items-center gap-px shrink-0">
           {isSaving ? (
             <Tooltip content="Saving...">
               <div className="h-7 w-7 flex items-center justify-center">
@@ -901,6 +889,21 @@ export function Editor({
               </DropdownMenu.Content>
             </DropdownMenu.Portal>
           </DropdownMenu.Root>
+          {onSaveToFolder && (
+            <Tooltip content="Save in Folder">
+              <IconButton
+                onClick={onSaveToFolder}
+                aria-label="Save in Folder"
+                disabled={saveToFolderDisabled}
+              >
+                {saveToFolderDisabled ? (
+                  <SpinnerIcon className="w-4.25 h-4.25 animate-spin" />
+                ) : (
+                  <FolderPlusIcon className="w-4.25 h-4.25 stroke-[1.6]" />
+                )}
+              </IconButton>
+            </Tooltip>
+          )}
           {!isMac && (
             <div className="ml-1 flex items-center gap-px border-l border-border/70 pl-1">
               <IconButton onClick={minimizeWindow} title="Minimize window" aria-label="Minimize window">
@@ -918,21 +921,6 @@ export function Editor({
                 <XIcon className="w-4.25 h-4.25 stroke-[1.7]" />
               </IconButton>
             </div>
-          )}
-          {onSaveToFolder && (
-            <Tooltip content="Save in Folder">
-              <IconButton
-                onClick={onSaveToFolder}
-                aria-label="Save in Folder"
-                disabled={saveToFolderDisabled}
-              >
-                {saveToFolderDisabled ? (
-                  <SpinnerIcon className="w-4.25 h-4.25 animate-spin" />
-                ) : (
-                  <FolderPlusIcon className="w-4.25 h-4.25 stroke-[1.6]" />
-                )}
-              </IconButton>
-            </Tooltip>
           )}
         </div>
       </div>

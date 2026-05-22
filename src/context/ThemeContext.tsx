@@ -58,8 +58,8 @@ const defaultEditorFontSettings: Required<EditorFontSettings> = {
 };
 
 const DEFAULT_SCHEMA_BY_MODE: Record<ThemeMode, string> = {
-  light: "default",
-  dark: "default",
+  light: "Default",
+  dark: "Default",
 };
 
 const USER_THEME_STYLE_ID = "aoroza-user-theme-css";
@@ -146,7 +146,7 @@ function chooseColorSchemaForMode(
   if (requested && available.some((schema) => schema.name === requested)) return requested;
   const defaultSchema = DEFAULT_SCHEMA_BY_MODE[mode];
   if (available.some((schema) => schema.name === defaultSchema)) return defaultSchema;
-  return available[0]?.name ?? "default";
+  return available[0]?.name ?? "Default";
 }
 
 function installThemeCss(css: string) {

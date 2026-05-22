@@ -8,15 +8,20 @@ export interface SelectProps
 const Select = React.forwardRef<HTMLSelectElement, SelectProps>(
   ({ className, children, ...props }, ref) => {
     return (
-      <div className="relative">
+      <div
+        className={cn(
+          "relative rounded-md border border-border",
+          "has-[select:focus-visible]:outline has-[select:focus-visible]:outline-accent",
+          "has-[select:disabled]:opacity-50 has-[select:disabled]:cursor-not-allowed",
+          className,
+        )}
+      >
         <select
           className={cn(
-            "flex h-9 w-full items-center justify-between rounded-md border border-border bg-bg px-3 py-2 text-sm text-text",
-            "focus:outline focus:outline-accent",
-            "disabled:cursor-not-allowed disabled:opacity-50",
+            "flex h-9 w-full items-center justify-between bg-bg px-3 py-2 text-sm text-text rounded-md",
+            "disabled:cursor-not-allowed",
             "[&>option]:bg-bg [&>option]:text-text",
             "appearance-none pr-8",
-            className
           )}
           ref={ref}
           {...props}

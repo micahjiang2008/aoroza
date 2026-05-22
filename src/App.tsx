@@ -148,7 +148,7 @@ function App() {
     return (
       <ThemeProvider>
         <Toaster />
-        <TooltipProvider>
+        <TooltipProvider skipDelayDuration={0}>
           <PreviewApp filePath={previewFile} />
         </TooltipProvider>
       </ThemeProvider>
@@ -158,7 +158,7 @@ function App() {
   // Folder mode: full app with sidebar, etc.
   return (
     <ThemeProvider>
-      <TooltipProvider>
+      <TooltipProvider skipDelayDuration={0}>
         <NotesProvider>
           <AppContent />
         </NotesProvider>

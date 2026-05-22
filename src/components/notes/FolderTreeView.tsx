@@ -11,9 +11,10 @@ import {
 } from "../ui";
 import {
   ChevronRightIcon, ChevronDownIcon, AddNoteIcon, FolderPlusIcon,
-  PencilIcon, TrashIcon, NoteIcon, CopyIcon,
+  PencilIcon, TrashIcon, NoteIcon, CopyIcon, FolderIcon,
 } from "../icons";
 import * as notesService from "../../services/notes";
+import { isMac } from "../../lib/platform";
 import type { FolderNode, NoteMetadata } from "../../types/note";
 
 const STORAGE_KEY = "aoroza:collapsedFolders";
@@ -40,10 +41,11 @@ interface FileItemProps {
   onRename: (id: string, currentName: string) => void;
   onDuplicate: (id: string) => Promise<void>;
   onDelete: (id: string) => void;
+  onReveal: (id: string) => void;
 }
 
 const FileItem = memo(function FileItem({
-  note, depth, isSelected, onNoteClick, onRename, onDuplicate, onDelete,
+  note, depth, isSelected, onNoteClick, onRename, onDuplicate, onDelete, onReveal,
 }: FileItemProps) {
   const itemRef = useRef<HTMLDivElement>(null);
   const handleClick = useCallback(() => onNoteClick(note.id), [onNoteClick, note.id]);
@@ -70,6 +72,10 @@ const FileItem = memo(function FileItem({
             <CopyIcon className="w-4 h-4 stroke-[1.6]" />Duplicate
           </ContextMenu.Item>
           <ContextMenu.Separator className={menuSeparatorClass} />
+          <ContextMenu.Item className={menuItemClass} onSelect={() => onReveal(note.id)}>
+            <FolderIcon className="w-4 h-4 stroke-[1.6]" />{isMac ? "Reveal in Finder" : "Reveal in File Explorer"}
+          </ContextMenu.Item>
+          <ContextMenu.Separator className={menuSeparatorClass} />
           <ContextMenu.Item className={`${menuItemClass} text-red-500 hover:text-red-500 focus:text-red-500`} onSelect={() => onDelete(note.id)}>
             <TrashIcon className="w-4 h-4 stroke-[1.6]" />Delete
           </ContextMenu.Item>
@@ -93,12 +99,14 @@ interface FolderItemProps {
   onRenameNote: (id: string, currentName: string) => void;
   onDuplicateNote: (id: string) => Promise<void>;
   onDeleteNote: (id: string) => void;
+  onRevealNote: (id: string) => void;
+  onRevealFolder: (path: string) => void;
 }
 
 const FolderItemComponent = memo(function FolderItem({
   folder, depth, collapsedFolders, onToggleCollapse, selectedNoteId,
   onNoteClick, onCreateNoteHere, onNewSubfolder, onRenameFolder, onDeleteFolder,
-  onRenameNote, onDuplicateNote, onDeleteNote,
+  onRenameNote, onDuplicateNote, onDeleteNote, onRevealNote, onRevealFolder,
 }: FolderItemProps) {
   const isCollapsed = collapsedFolders.has(folder.path);
   const isEmpty = countNotesInFolder(folder) === 0 && folder.children.length === 0;
@@ -126,12 +134,14 @@ const FolderItemComponent = memo(function FolderItem({
                   onNewSubfolder={onNewSubfolder} onRenameFolder={onRenameFolder}
                   onDeleteFolder={onDeleteFolder} onRenameNote={onRenameNote}
                   onDuplicateNote={onDuplicateNote}
-                  onDeleteNote={onDeleteNote} />
+                  onDeleteNote={onDeleteNote}
+                  onRevealNote={onRevealNote} onRevealFolder={onRevealFolder} />
               ))}
               {folder.notes.map((note) => (
                 <FileItem key={note.id} note={note} depth={depth + 1}
                   isSelected={selectedNoteId === note.id}
-                  onNoteClick={onNoteClick} onRename={onRenameNote} onDuplicate={onDuplicateNote} onDelete={onDeleteNote} />
+                  onNoteClick={onNoteClick} onRename={onRenameNote} onDuplicate={onDuplicateNote} onDelete={onDeleteNote}
+                  onReveal={onRevealNote} />
               ))}
               {isEmpty && <div className="text-sm text-text-muted/50 py-1 select-none" style={{ paddingLeft: `${(depth + 1) * 12 + 24}px` }}>Empty</div>}
             </div>
@@ -151,6 +161,10 @@ const FolderItemComponent = memo(function FolderItem({
             <PencilIcon className="w-4 h-4 stroke-[1.6]" />Rename
           </ContextMenu.Item>
           <ContextMenu.Separator className={menuSeparatorClass} />
+          <ContextMenu.Item className={menuItemClass} onSelect={() => onRevealFolder(folder.path)}>
+            <FolderIcon className="w-4 h-4 stroke-[1.6]" />{isMac ? "Reveal in Finder" : "Reveal in File Explorer"}
+          </ContextMenu.Item>
+          <ContextMenu.Separator className={menuSeparatorClass} />
           <ContextMenu.Item className={`${menuItemClass} text-red-500 hover:text-red-500 focus:text-red-500`} onSelect={() => onDeleteFolder(folder.path)}>
             <TrashIcon className="w-4 h-4 stroke-[1.6]" />Delete Folder
           </ContextMenu.Item>
@@ -162,7 +176,7 @@ const FolderItemComponent = memo(function FolderItem({
 
 export function FolderTreeView() {
   const { notes, selectedNoteId, selectNote, createNoteInFolder, createFolder,
-    deleteFolder, renameFolder, renameNote, duplicateNote, deleteNote } = useNotes();
+    deleteFolder, renameFolder, renameNote, duplicateNote, deleteNote, notesFolder } = useNotes();
 
   const [collapsedFolders, setCollapsed] = useState<Set<string>>(loadCollapsed);
   const [delDialogOpen, setDelDialogOpen] = useState(false);
@@ -213,6 +227,28 @@ export function FolderTreeView() {
     if (folderToDel) { try { await deleteFolder(folderToDel); setFolderToDel(null); setDelDialogOpen(false); } catch (e) { toast.error("Failed to delete folder"); console.error(e); } }
   }, [folderToDel, deleteFolder]);
 
+  const handleRevealNote = useCallback(async (id: string) => {
+    if (!notesFolder) return;
+    try {
+      const fullPath = `${notesFolder}/${id}.md`;
+      await notesService.revealInFileManager(fullPath);
+    } catch (err) {
+      toast.error("Failed to open file location");
+      console.error(err);
+    }
+  }, [notesFolder]);
+
+  const handleRevealFolder = useCallback(async (path: string) => {
+    if (!notesFolder) return;
+    try {
+      const fullPath = `${notesFolder}/${path}`;
+      await notesService.revealInFileManager(fullPath);
+    } catch (err) {
+      toast.error("Failed to open file location");
+      console.error(err);
+    }
+  }, [notesFolder]);
+
   const visibleItems = useMemo(() => getVisibleItems(tree, collapsedFolders), [tree, collapsedFolders]);
   const [focusedKey, setFocusedKey] = useState<string | null>(null);
 
@@ -260,12 +296,14 @@ export function FolderTreeView() {
             onNoteClick={selectNote} onCreateNoteHere={createNoteInFolder}
             onNewSubfolder={handleNewSubfolder} onRenameFolder={handleRenameFolder}
             onDeleteFolder={handleDeleteFolder} onRenameNote={handleRenameNote} onDuplicateNote={duplicateNote}
-            onDeleteNote={(id) => { setNoteToDel(id); setNoteDelOpen(true); }} />
+            onDeleteNote={(id) => { setNoteToDel(id); setNoteDelOpen(true); }}
+            onRevealNote={handleRevealNote} onRevealFolder={handleRevealFolder} />
         ))}
         {tree.rootNotes.map((n) => (
           <FileItem key={n.id} note={n} depth={0} isSelected={selectedNoteId === n.id}
             onNoteClick={selectNote} onRename={handleRenameNote} onDuplicate={duplicateNote}
-            onDelete={(id) => { setNoteToDel(id); setNoteDelOpen(true); }} />
+            onDelete={(id) => { setNoteToDel(id); setNoteDelOpen(true); }}
+            onReveal={handleRevealNote} />
         ))}
       </div>
 

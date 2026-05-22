@@ -87,3 +87,7 @@ export async function loadThemeCss(): Promise<string> {
 export async function startFileWatcher(): Promise<void> {
   return invoke("start_file_watcher");
 }
+
+export async function revealInFileManager(path: string): Promise<void> {
+  return invoke("open_in_file_manager", { path });
+}

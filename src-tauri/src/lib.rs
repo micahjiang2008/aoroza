@@ -73,11 +73,6 @@ pub struct ThemeSchema {
     pub mode: String,
 }
 
-struct ThemeSchemaDefinition {
-    info: ThemeSchema,
-    colors: HashMap<String, String>,
-}
-
 pub struct AppState {
     pub app_config: RwLock<AppConfig>,
     pub preview_file_paths: RwLock<HashMap<String, String>>,
@@ -121,290 +116,47 @@ fn save_config(config: &AppConfig) -> Result<(), String> {
     Ok(())
 }
 
-const COLOR_SCHEMA_SOURCE_DIR: &str = r"D:\MYWORK\pi-desktop\docs\CodexColorSchema";
-
-fn strip_md_value(line: &str, prefix: &str) -> Option<String> {
-    line.strip_prefix(prefix)
-        .map(|v| v.trim().trim_matches('`').to_string())
-        .filter(|v| !v.is_empty())
-}
-
-fn parse_color_schema_file(path: &Path) -> Result<Option<ThemeSchemaDefinition>, String> {
-    let content = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-    let mut label = path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("untitled")
-        .replace('-', " ");
-    let mut mode = String::new();
-    let mut name = path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("untitled")
-        .to_string();
-    let mut colors = HashMap::new();
-
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if let Some(title) = trimmed.strip_prefix("# ") {
-            label = title.trim().to_string();
-            continue;
-        }
-        if let Some(value) = strip_md_value(trimmed, "- **Type:**") {
-            mode = value.to_lowercase();
-            continue;
-        }
-        if let Some(value) = strip_md_value(trimmed, "- **System name:**") {
-            name = value;
-            continue;
-        }
-        if !trimmed.starts_with('|') || trimmed.contains("---") || trimmed.contains("Token") {
-            continue;
-        }
-        let cells: Vec<&str> = trimmed
-            .trim_matches('|')
-            .split('|')
-            .map(|c| c.trim())
-            .collect();
-        if cells.len() < 2 {
-            continue;
-        }
-        let token = cells[0].to_string();
-        let color = cells[1].trim_matches('`').trim().to_string();
-        if !token.is_empty() && !color.is_empty() {
-            colors.insert(token, color);
-        }
-    }
-
-    if mode != "light" && mode != "dark" {
-        if name.contains("dark") {
-            mode = "dark".to_string();
-        } else if name.contains("light") {
-            mode = "light".to_string();
-        }
-    }
-
-    if name.is_empty() || (mode != "light" && mode != "dark") {
-        return Ok(None);
-    }
-
-    Ok(Some(ThemeSchemaDefinition {
-        info: ThemeSchema { name, label, mode },
-        colors,
-    }))
-}
-
-fn read_color_schema_definitions() -> Result<Vec<ThemeSchemaDefinition>, String> {
-    let source = PathBuf::from(COLOR_SCHEMA_SOURCE_DIR);
-    if !source.exists() {
-        return Ok(Vec::new());
-    }
-
-    let mut definitions = Vec::new();
-    for entry in std::fs::read_dir(source).map_err(|e| e.to_string())? {
-        let path = entry.map_err(|e| e.to_string())?.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("md") {
-            continue;
-        }
-        if let Some(definition) = parse_color_schema_file(&path)? {
-            definitions.push(definition);
-        }
-    }
-
-    definitions.sort_by(|a, b| {
-        a.info.mode.cmp(&b.info.mode).then_with(|| {
-            a.info
-                .label
-                .to_lowercase()
-                .cmp(&b.info.label.to_lowercase())
-        })
-    });
-    Ok(definitions)
-}
-
-fn pick_color(colors: &HashMap<String, String>, keys: &[&str]) -> Option<String> {
-    keys.iter().find_map(|key| colors.get(*key).cloned())
-}
-
-fn css_attr_value(value: &str) -> String {
-    value.replace('\\', "\\\\").replace('"', "\\\"")
-}
-
-fn schema_css_property(
-    colors: &HashMap<String, String>,
-    css_key: &str,
-    tokens: &[&str],
-    fallback: &str,
-) -> String {
-    let value = pick_color(colors, tokens).unwrap_or_else(|| fallback.to_string());
-    format!("  --color-{}: {};\n", css_key, value)
-}
-
-fn generate_theme_css(definitions: &[ThemeSchemaDefinition]) -> String {
-    let mut css =
-        String::from("/* Generated from D:\\MYWORK\\pi-desktop\\docs\\CodexColorSchema. */\n");
-    css.push_str("/* Edit source Markdown files and restart Aoroza to refresh this file. */\n\n");
-    css.push_str(
-        r#":root[data-theme="light"][data-color-schema="default"] {
-  --color-bg: #ffffff;
-  --color-bg-secondary: #fafaf9;
-  --color-bg-muted: rgba(28, 25, 23, 0.06);
-  --color-bg-emphasis: rgba(28, 25, 23, 0.09);
-  --color-text: #1c1917;
-  --color-text-muted: #78716c;
-  --color-text-inverse: #fafaf9;
-  --color-border: rgba(28, 25, 23, 0.08);
-  --color-accent: #1c1917;
-  --color-selection: rgba(250, 204, 21, 0.4);
-}
-
-:root[data-theme="dark"][data-color-schema="default"] {
-  --color-bg: rgb(22, 20, 19);
-  --color-bg-secondary: rgb(14, 12, 11);
-  --color-bg-muted: rgba(250, 249, 249, 0.05);
-  --color-bg-emphasis: rgba(250, 249, 249, 0.08);
-  --color-text: #fafaf9;
-  --color-text-muted: #a8a29e;
-  --color-text-inverse: #0c0a09;
-  --color-border: rgba(250, 249, 249, 0.07);
-  --color-accent: #fafaf9;
-  --color-selection: rgba(253, 224, 71, 0.35);
-}
-
-"#,
-    );
-
-    for definition in definitions {
-        let mode = &definition.info.mode;
-        let name = css_attr_value(&definition.info.name);
-        let colors = &definition.colors;
-        let inverse = if mode == "dark" { "#0c0a09" } else { "#fafaf9" };
-        let muted_fallback = if mode == "dark" { "#a8a29e" } else { "#78716c" };
-        let border_fallback = if mode == "dark" {
-            "rgba(250, 249, 249, 0.07)"
-        } else {
-            "rgba(28, 25, 23, 0.08)"
-        };
-
-        css.push_str(&format!(
-            ":root[data-theme=\"{}\"][data-color-schema=\"{}\"] {{\n",
-            mode, name
-        ));
-        css.push_str(&schema_css_property(
-            colors,
-            "bg",
-            &["editor.background"],
-            if mode == "dark" {
-                "rgb(22, 20, 19)"
-            } else {
-                "#ffffff"
-            },
-        ));
-        css.push_str(&schema_css_property(
-            colors,
-            "bg-secondary",
-            &[
-                "sideBar.background",
-                "panel.background",
-                "editorGroupHeader.tabsBackground",
-            ],
-            if mode == "dark" {
-                "rgb(14, 12, 11)"
-            } else {
-                "#fafaf9"
-            },
-        ));
-        css.push_str(&schema_css_property(
-            colors,
-            "bg-muted",
-            &["list.hoverBackground", "list.inactiveSelectionBackground"],
-            if mode == "dark" {
-                "rgba(250, 249, 249, 0.05)"
-            } else {
-                "rgba(28, 25, 23, 0.06)"
-            },
-        ));
-        css.push_str(&schema_css_property(
-            colors,
-            "bg-emphasis",
-            &["list.activeSelectionBackground", "tab.inactiveBackground"],
-            if mode == "dark" {
-                "rgba(250, 249, 249, 0.08)"
-            } else {
-                "rgba(28, 25, 23, 0.09)"
-            },
-        ));
-        css.push_str(&schema_css_property(
-            colors,
-            "text",
-            &["editor.foreground", "foreground"],
-            if mode == "dark" { "#fafaf9" } else { "#1c1917" },
-        ));
-        css.push_str(&schema_css_property(
-            colors,
-            "text-muted",
-            &[
-                "sideBar.foreground",
-                "tab.inactiveForeground",
-                "titleBar.activeForeground",
-            ],
-            muted_fallback,
-        ));
-        css.push_str(&format!("  --color-text-inverse: {};\n", inverse));
-        css.push_str(&schema_css_property(
-            colors,
-            "border",
-            &["input.border", "tab.border"],
-            border_fallback,
-        ));
-        css.push_str(&schema_css_property(
-            colors,
-            "accent",
-            &[
-                "button.background",
-                "focusBorder",
-                "textLink.foreground",
-                "activityBar.activeBorder",
-            ],
-            if mode == "dark" { "#fafaf9" } else { "#1c1917" },
-        ));
-        css.push_str(&schema_css_property(
-            colors,
-            "selection",
-            &[
-                "editor.selectionBackground",
-                "list.activeSelectionBackground",
-                "activityBarBadge.background",
-            ],
-            if mode == "dark" {
-                "rgba(253, 224, 71, 0.35)"
-            } else {
-                "rgba(250, 204, 21, 0.4)"
-            },
-        ));
-        css.push_str("}\n\n");
-    }
-
-    css
-}
-
 fn refresh_theme_css_file() -> Result<(Vec<ThemeSchema>, String), String> {
-    let definitions = read_color_schema_definitions()?;
-    let css = generate_theme_css(&definitions);
-    std::fs::write(theme_css_path()?, &css).map_err(|e| e.to_string())?;
-    let mut schemas = vec![
-        ThemeSchema {
-            name: "default".to_string(),
-            label: "Default".to_string(),
-            mode: "light".to_string(),
-        },
-        ThemeSchema {
-            name: "default".to_string(),
-            label: "Default".to_string(),
-            mode: "dark".to_string(),
-        },
-    ];
-    schemas.extend(definitions.into_iter().map(|d| d.info));
+    let theme_path = theme_css_path()?;
+    if !theme_path.exists() {
+        std::fs::write(&theme_path, include_str!("../assets/default_theme.css"))
+            .map_err(|e| e.to_string())?;
+    }
+    let css = std::fs::read_to_string(&theme_path).map_err(|e| e.to_string())?;
+
+    let schema_re = Regex::new(
+        r#":root\[data-theme="([^"]+)"\]\[data-color-schema="([^"]+)"\]"#,
+    )
+    .unwrap();
+    let mut schemas: Vec<ThemeSchema> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for cap in schema_re.captures_iter(&css) {
+        let mode = cap[1].to_string();
+        let name = cap[2].to_string();
+        if seen.insert((name.clone(), mode.clone())) {
+            let label = if name == "default" {
+                "Default".to_string()
+            } else {
+                name.replace('-', " ")
+            };
+            schemas.push(ThemeSchema { name, label, mode });
+        }
+    }
+    if schemas.is_empty() {
+        schemas = vec![
+            ThemeSchema {
+                name: "default".to_string(),
+                label: "Default".to_string(),
+                mode: "light".to_string(),
+            },
+            ThemeSchema {
+                name: "default".to_string(),
+                label: "Default".to_string(),
+                mode: "dark".to_string(),
+            },
+        ];
+    }
+
     Ok((schemas, css))
 }
 
@@ -1247,14 +999,55 @@ async fn open_folder_dialog(
 #[tauri::command]
 async fn open_in_file_manager(path: String) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
-    if !path_buf.exists() || !path_buf.is_dir() {
-        return Err("Path does not exist or is not a directory".to_string());
+    if !path_buf.exists() {
+        return Err(format!("Path does not exist: {}", path));
     }
     #[cfg(target_os = "windows")]
     {
         let windows_path = path.replace("/", "\\");
-        std::process::Command::new("explorer")
-            .arg(&windows_path)
+        if path_buf.is_file() {
+            // explorer /select,<path> opens parent folder and selects the file
+            std::process::Command::new("explorer")
+                .arg("/select,")
+                .arg(&windows_path)
+                .spawn()
+                .map_err(|e| e.to_string())?;
+        } else {
+            std::process::Command::new("explorer")
+                .arg(&windows_path)
+                .spawn()
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if path_buf.is_file() {
+            std::process::Command::new("open")
+                .arg("-R")
+                .arg(&path)
+                .spawn()
+                .map_err(|e| e.to_string())?;
+        } else {
+            std::process::Command::new("open")
+                .arg(&path)
+                .spawn()
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        // Linux: open parent folder for files, or the folder itself
+        let target = if path_buf.is_file() {
+            path_buf
+                .parent()
+                .ok_or("Cannot get parent directory".to_string())?
+                .to_string_lossy()
+                .into_owned()
+        } else {
+            path
+        };
+        std::process::Command::new("xdg-open")
+            .arg(&target)
             .spawn()
             .map_err(|e| e.to_string())?;
     }
@@ -1523,8 +1316,22 @@ pub fn run() {
                     }
                 }
             }
-            let _ = app.get_webview_window("main").map(|w| w.set_focus());
+            let _ = app.get_webview_window("main").map(|w| {
+                let _ = w.show();
+                let _ = w.set_focus();
+            });
         }))
+        .on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::Destroyed) {
+                let app = window.app_handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    if app.webview_windows().is_empty() {
+                        app.exit(0);
+                    }
+                });
+            }
+        })
         .setup(|app| {
             app.manage(AppState {
                 app_config: RwLock::new(load_config()),
@@ -1559,6 +1366,14 @@ pub fn run() {
                 if let Some(main_window) = app.get_webview_window("main") {
                     let _ = main_window.show();
                 }
+            } else if let Some(preview_window) = app
+                .webview_windows()
+                .iter()
+                .find(|(label, _)| label.starts_with("preview-"))
+                .map(|(_, w)| w)
+            {
+                // If a preview window was created, make sure it gets focus
+                let _ = preview_window.set_focus();
             }
 
             Ok(())

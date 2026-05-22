@@ -40,7 +40,7 @@ export function Tooltip({
   children,
   content,
   side = "bottom",
-  delayDuration = 200,
+  delayDuration = 100,
 }: TooltipProps) {
   return (
     <TooltipRoot delayDuration={delayDuration}>
