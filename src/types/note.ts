@@ -48,7 +48,7 @@ export interface Settings {
   interfaceZoom?: number;
   ollamaModel?: string;
   ignoredPatterns?: string[];
-  customFonts?: string[];
+  customFonts?: Record<string, string>;
 }
 
 export interface FolderNode {

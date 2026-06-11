@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useState, useEffect, useRef, memo } from "react";
 import * as ContextMenu from "@radix-ui/react-context-menu";
+import { cn } from "../../lib/utils";
 import { useNotes } from "../../context/NotesContext";
 import { buildFolderTree, countNotesInFolder, getVisibleItems, type TreeItem } from "../../lib/folderTree";
 import { FolderNameDialog } from "./FolderNameDialog";
@@ -76,7 +77,7 @@ const FileItem = memo(function FileItem({
             <FolderIcon className="w-4 h-4 stroke-[1.6]" />{isMac ? "Reveal in Finder" : "Reveal in File Explorer"}
           </ContextMenu.Item>
           <ContextMenu.Separator className={menuSeparatorClass} />
-          <ContextMenu.Item className={`${menuItemClass} text-red-500 hover:text-red-500 focus:text-red-500`} onSelect={() => onDelete(note.id)}>
+          <ContextMenu.Item className={cn(menuItemClass, "text-red-500 hover:bg-red-500/10 focus:bg-red-500/10")} onSelect={() => onDelete(note.id)}>
             <TrashIcon className="w-4 h-4 stroke-[1.6]" />Delete
           </ContextMenu.Item>
         </ContextMenu.Content>
@@ -165,7 +166,7 @@ const FolderItemComponent = memo(function FolderItem({
             <FolderIcon className="w-4 h-4 stroke-[1.6]" />{isMac ? "Reveal in Finder" : "Reveal in File Explorer"}
           </ContextMenu.Item>
           <ContextMenu.Separator className={menuSeparatorClass} />
-          <ContextMenu.Item className={`${menuItemClass} text-red-500 hover:text-red-500 focus:text-red-500`} onSelect={() => onDeleteFolder(folder.path)}>
+          <ContextMenu.Item className={cn(menuItemClass, "text-red-500 hover:bg-red-500/10 focus:bg-red-500/10")} onSelect={() => onDeleteFolder(folder.path)}>
             <TrashIcon className="w-4 h-4 stroke-[1.6]" />Delete Folder
           </ContextMenu.Item>
         </ContextMenu.Content>
@@ -314,7 +315,7 @@ export function FolderTreeView() {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleDeleteConfirm} className="text-red-500">Delete</AlertDialogAction>
+            <AlertDialogAction onClick={handleDeleteConfirm} className="border border-red-500 text-red-500 bg-transparent hover:bg-red-500/10 rounded-md">Delete</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
@@ -326,7 +327,7 @@ export function FolderTreeView() {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={async () => { if (noteToDel) { try { await deleteNote(noteToDel); setNoteToDel(null); setNoteDelOpen(false); } catch {} } }}>Delete</AlertDialogAction>
+            <AlertDialogAction onClick={async () => { if (noteToDel) { try { await deleteNote(noteToDel); setNoteToDel(null); setNoteDelOpen(false); } catch {} } }} className="border border-red-500 text-red-500 bg-transparent hover:bg-red-500/10 rounded-md">Delete</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

@@ -29,19 +29,19 @@ export function FolderPicker() {
       <div className="h-10 shrink-0" data-tauri-drag-region />
 
       <div className="flex-1 flex items-center justify-center">
-        <div className="text-center p-8 max-w-lg select-none">
+        <div className="text-center p-8 max-w-xl select-none">
           <h1
             className="text-3xl text-text font-serif mb-2 tracking-[-0.01em] animate-fade-in-up"
             style={{ animationDelay: "100ms" }}
           >
-            Let's get started
+            Every thought deserves a quiet home.
           </h1>
           <p
             className="text-text-muted mb-6 animate-fade-in-up"
-            style={{ animationDelay: "100ms" }}
+            style={{ animationDelay: "150ms" }}
           >
-            Aoroza stores your notes as plain markdown files on your computer.
-            Just pick a folder to begin.
+            Aoroza will keep your words as simple Markdown files,
+            right where they belong: on your computer.
           </p>
           <div
             className="animate-fade-in-up"

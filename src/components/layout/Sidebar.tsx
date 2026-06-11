@@ -5,7 +5,7 @@ import { useNotes } from "../../context/NotesContext";
 import { NoteList } from "../notes/NoteList";
 import { Footer } from "./Footer";
 import { invoke } from "@tauri-apps/api/core";
-import { IconButton } from "../ui";
+import { IconButton, Tooltip } from "../ui";
 import { PlusIcon, AddNoteIcon, FolderPlusIcon, FoldersIcon } from "../icons";
 import { mod, isMac } from "../../lib/platform";
 import { FolderNameDialog } from "../notes/FolderNameDialog";
@@ -53,9 +53,9 @@ export function Sidebar({ onOpenSettings }: SidebarProps) {
 
   return (
     <div className="relative w-64 h-full bg-bg-secondary border-r border-border flex flex-col select-none">
-      <div className="h-11 shrink-0" data-tauri-drag-region />
+      {/* <div className="h-11 shrink-0" data-tauri-drag-region /> */}
 
-      <div className="flex items-center justify-between pl-4 pr-3 pb-2 border-b border-border shrink-0">
+      <div className="h-11 shrink-0 flex items-center justify-between px-3 border-b border-border" data-tauri-drag-region>
         <div className="flex items-center gap-1">
           <div className="font-medium text-base">Notes</div>
           <div className="text-text-muted font-medium text-2xs min-w-4.75 h-4.75 flex items-center justify-center px-1 bg-bg-muted rounded-sm mt-0.5 pt-px">
@@ -65,7 +65,7 @@ export function Sidebar({ onOpenSettings }: SidebarProps) {
         <div className="flex items-center gap-px">
           <DropdownMenu.Root open={plusMenuOpen} onOpenChange={setPlusMenuOpen}>
             <DropdownMenu.Trigger asChild>
-              <IconButton variant="ghost" title="New Note or Folder">
+              <IconButton variant="ghost">
                 <PlusIcon className="w-5.25 h-5.25 stroke-[1.4]" />
               </IconButton>
             </DropdownMenu.Trigger>
@@ -90,9 +90,11 @@ export function Sidebar({ onOpenSettings }: SidebarProps) {
               </DropdownMenu.Content>
             </DropdownMenu.Portal>
           </DropdownMenu.Root>
-          <IconButton variant="ghost" title="Change Folder" onClick={handleChangeFolder}>
-            <FoldersIcon className="w-5 h-5 stroke-[1.4]" />
-          </IconButton>
+          <Tooltip content="Change Folder">
+            <IconButton variant="ghost" onClick={handleChangeFolder}>
+              <FoldersIcon className="w-5 h-5 stroke-[1.4]" />
+            </IconButton>
+          </Tooltip>
         </div>
       </div>
 
@@ -100,7 +102,7 @@ export function Sidebar({ onOpenSettings }: SidebarProps) {
         <NoteList />
       </div>
 
-      <Footer onOpenSettings={onOpenSettings} />
+      <Footer notesFolder={notesFolder} onOpenSettings={onOpenSettings} />
 
       <FolderNameDialog
         open={folderDialogOpen} onOpenChange={setFolderDialogOpen}

@@ -82,7 +82,7 @@ export function SearchToolbar({
           <ArrowDownIcon className="w-4.5 h-4.5 stroke-[1.5]" />
         </IconButton>
 
-        <IconButton onClick={onClose} title="Close (Esc)">
+        <IconButton onClick={onClose}>
           <XIcon className="w-4.5 h-4.5 stroke-[1.5]" />
         </IconButton>
       </div>

@@ -6,7 +6,7 @@ import type {
 } from "../../types/note";
 import { EyeIcon, MinusIcon, PlusIcon, RefreshCwIcon } from "../icons";
 
-function resolvePreviewFontFamily(font: string): string {
+function resolvePreviewFontFamily(font: string, customFonts?: Record<string, string>): string {
   const builtInFonts: Record<string, string> = {
     "system-sans":
       "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
@@ -14,7 +14,7 @@ function resolvePreviewFontFamily(font: string): string {
     monospace:
       "ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, Consolas, 'DejaVu Sans Mono', monospace",
   };
-  return builtInFonts[font] ?? font;
+  return builtInFonts[font] ?? customFonts?.[font] ?? font;
 }
 
 const textDirectionOptions: { value: TextDirection; label: string }[] = [
@@ -58,6 +58,7 @@ export function AppearanceSettingsSection() {
     customEditorWidthPx,
     setCustomEditorWidthPx,
     getAvailableFonts,
+    customFonts,
   } = useTheme();
 
   const handleNumericChange = (
@@ -143,9 +144,6 @@ export function AppearanceSettingsSection() {
               </IconButton>
             </div>
           </div>
-          <p className="mt-2 text-xs text-text-muted">
-            Schemas are generated from D:\MYWORK\pi-desktop\docs\CodexColorSchema into ~/.aoroza/theme.css.
-          </p>
         </div>
       </section>
 
@@ -339,7 +337,7 @@ export function AppearanceSettingsSection() {
               className="prose prose-lg dark:prose-invert max-w-xl mx-auto"
               dir={textDirection}
               style={{
-                fontFamily: resolvePreviewFontFamily(editorFontSettings.baseFontFamily),
+                fontFamily: resolvePreviewFontFamily(editorFontSettings.baseFontFamily, customFonts),
                 fontSize: `${editorFontSettings.baseFontSize}px`,
               }}
             >

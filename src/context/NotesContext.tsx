@@ -124,16 +124,18 @@ export function NotesProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const noteIdSet = useMemo(() => new Set(notes.map((n) => n.id)), [notes]);
+
   const saveNote = useCallback(async (content: string) => {
     if (!selectedNoteId && isBlankDraft(content)) return null;
     try {
       const updated = await notesService.saveNote(selectedNoteId, content);
       setCurrentNote(updated);
-      const shouldRefresh = updated.id !== selectedNoteId || !notes.some((note) => note.id === updated.id);
+      const isNewNote = updated.id !== selectedNoteId || !noteIdSet.has(updated.id);
       if (updated.id !== selectedNoteId) {
         setSelectedNoteId(updated.id);
       }
-      if (shouldRefresh) {
+      if (isNewNote) {
         await refreshNotes();
       }
       return updated;
@@ -141,7 +143,7 @@ export function NotesProvider({ children }: { children: ReactNode }) {
       console.error("Failed to save note:", err);
       return null;
     }
-  }, [notes, selectedNoteId, refreshNotes]);
+  }, [noteIdSet, selectedNoteId, refreshNotes]);
 
   const createNoteCommon = useCallback(async (targetFolder?: string) => {
     try {
@@ -189,6 +191,10 @@ export function NotesProvider({ children }: { children: ReactNode }) {
 
   const setNotesFolder = useCallback(async (path: string) => {
     try {
+      setIsLoading(true);
+      setSelectedNoteId(null);
+      setCurrentNote(null);
+      setNotes([]);
       await notesService.setNotesFolder(path);
       setNotesFolderState(path);
       const list = await notesService.listNotes();
@@ -196,6 +202,8 @@ export function NotesProvider({ children }: { children: ReactNode }) {
       await notesService.startFileWatcher().catch(console.error);
     } catch (err) {
       console.error("Failed to set notes folder:", err);
+    } finally {
+      setIsLoading(false);
     }
   }, []);
 
@@ -231,6 +239,8 @@ export function NotesProvider({ children }: { children: ReactNode }) {
       const newId = await notesService.renameNote(id, newName);
       if (selectedNoteId === id) {
         setSelectedNoteId(newId);
+        const note = await notesService.readNote(newId);
+        setCurrentNote(note);
       }
       await refreshNotes();
     } catch (err) {
@@ -241,9 +251,14 @@ export function NotesProvider({ children }: { children: ReactNode }) {
 
   const moveNote = useCallback(async (id: string, targetFolder: string) => {
     const newId = await notesService.moveNote(id, targetFolder);
+    if (selectedNoteId === id) {
+      setSelectedNoteId(newId);
+      const note = await notesService.readNote(newId);
+      setCurrentNote(note);
+    }
     await refreshNotes();
     return newId;
-  }, [refreshNotes]);
+  }, [selectedNoteId, refreshNotes]);
 
   const moveFolder = useCallback(async (path: string, targetParent: string) => {
     await notesService.moveFolder(path, targetParent);

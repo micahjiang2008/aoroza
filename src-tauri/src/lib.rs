@@ -2,7 +2,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::RwLock;
+use std::sync::{LazyLock, RwLock};
 use tauri::{Emitter, Manager, State};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use walkdir::WalkDir;
@@ -38,7 +38,12 @@ pub struct Settings {
     pub editor_width: Option<String>,
     pub custom_editor_width_px: Option<i32>,
     pub interface_zoom: Option<f32>,
-    pub custom_fonts: Option<Vec<String>>,
+    pub custom_fonts: Option<HashMap<String, String>>,
+    pub window_maximized: Option<bool>,
+    pub window_x: Option<i32>,
+    pub window_y: Option<i32>,
+    pub window_width: Option<u32>,
+    pub window_height: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -73,10 +78,17 @@ pub struct ThemeSchema {
     pub mode: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct NoteCacheEntry {
+    pub metadata: NoteMetadata,
+    pub mtime: i64,
+}
+
 pub struct AppState {
     pub app_config: RwLock<AppConfig>,
-    pub preview_file_paths: RwLock<HashMap<String, String>>,
     pub watcher: RwLock<Option<(notify::RecommendedWatcher, PathBuf)>>,
+    pub note_metadata_cache: RwLock<HashMap<String, NoteCacheEntry>>,
+    pub cached_folders: RwLock<Vec<String>>,
 }
 // ── Config paths ─────────────────────────────────────────────────────────
 
@@ -242,93 +254,20 @@ fn generate_preview(content: &str) -> String {
 }
 
 fn strip_markdown(text: &str) -> String {
-    let mut result = text.to_string();
-    let trimmed_h = result.trim_start();
-    if trimmed_h.starts_with('#') {
-        result = trimmed_h.trim_start_matches('#').trim_start().to_string();
-    }
-    while let Some(s) = result.find("~~") {
-        if let Some(e) = result[s + 2..].find("~~") {
-            let inner = &result[s + 2..s + 2 + e];
-            result = format!("{}{}{}", &result[..s], inner, &result[s + 4 + e..]);
-        } else {
-            break;
-        }
-    }
-    while let Some(s) = result.find("**") {
-        if let Some(e) = result[s + 2..].find("**") {
-            let inner = &result[s + 2..s + 2 + e];
-            result = format!("{}{}{}", &result[..s], inner, &result[s + 4 + e..]);
-        } else {
-            break;
-        }
-    }
-    while let Some(s) = result.find("__") {
-        if let Some(e) = result[s + 2..].find("__") {
-            let inner = &result[s + 2..s + 2 + e];
-            result = format!("{}{}{}", &result[..s], inner, &result[s + 4 + e..]);
-        } else {
-            break;
-        }
-    }
-    while let Some(s) = result.find('`') {
-        if let Some(e) = result[s + 1..].find('`') {
-            let inner = &result[s + 1..s + 1 + e];
-            result = format!("{}{}{}", &result[..s], inner, &result[s + 2 + e..]);
-        } else {
-            break;
-        }
-    }
-    let img_re = Regex::new(r"!\[([^\]]*)\]\([^)]+\)").unwrap();
-    result = img_re.replace_all(&result, "$1").to_string();
-    let link_re = Regex::new(r"\[([^\]]+)\]\([^)]+\)").unwrap();
-    result = link_re.replace_all(&result, "$1").to_string();
-    while let Some(s) = result.find('*') {
-        if let Some(e) = result[s + 1..].find('*') {
-            if e > 0 {
-                let inner = &result[s + 1..s + 1 + e];
-                result = format!("{}{}{}", &result[..s], inner, &result[s + 2 + e..]);
-            } else {
-                break;
-            }
-        } else {
-            break;
-        }
-    }
-    while let Some(s) = result.find('_') {
-        if let Some(e) = result[s + 1..].find('_') {
-            if e > 0 {
-                let inner = &result[s + 1..s + 1 + e];
-                result = format!("{}{}{}", &result[..s], inner, &result[s + 2 + e..]);
-            } else {
-                break;
-            }
-        } else {
-            break;
-        }
-    }
-    result = result.replace("- [ ] ", "").replace("- [x] ", "");
+    static RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r"!\[([^\]]*)\]\([^)]+\)|\[([^\]]+)\]\([^)]+\)|#+|~~|\*\*|__|`|\*|_|- \[[ x]\] "
+        ).unwrap()
+    });
+    let result = RE.replace_all(text, |caps: &regex::Captures| {
+        caps.get(1).or_else(|| caps.get(2)).map(|m| m.as_str().to_string()).unwrap_or_default()
+    });
     result.trim().to_string()
 }
 
 fn is_effectively_empty(s: &str) -> bool {
     s.chars()
         .all(|c| c.is_whitespace() || c == '\u{00A0}' || c == '\u{FEFF}')
-}
-
-fn update_heading(content: &str, new_title: &str) -> String {
-    // Replace the first H1 heading with the new title
-    if let Some(pos) = content.find("# ") {
-        let after_hash = &content[pos + 2..];
-        let line_end = after_hash.find('\n').unwrap_or(after_hash.len());
-        let mut result = String::with_capacity(content.len() + new_title.len());
-        result.push_str(&content[..pos + 2]);
-        result.push_str(new_title);
-        result.push_str(&after_hash[line_end..]);
-        return result;
-    }
-    // No H1 found, prepend one
-    format!("# {}\n\n{}", new_title, content)
 }
 
 fn sanitize_filename(title: &str) -> String {
@@ -458,22 +397,6 @@ fn abs_path_from_id(root: &Path, id: &str) -> Result<PathBuf, String> {
     Ok(path)
 }
 
-fn extract_title_from_id(id: &str) -> String {
-    let filename = id.rsplit('/').next().unwrap_or(id);
-    let title = filename.replace(['-', '_'], " ");
-    title
-        .split_whitespace()
-        .map(|word| {
-            let mut chars = word.chars();
-            match chars.next() {
-                None => String::new(),
-                Some(first) => first.to_uppercase().to_string() + chars.as_str(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
 fn get_notes_folder_path(state: &State<AppState>) -> Result<PathBuf, String> {
     let folder = state
         .app_config
@@ -483,68 +406,6 @@ fn get_notes_folder_path(state: &State<AppState>) -> Result<PathBuf, String> {
         .clone()
         .ok_or("Notes folder not set".to_string())?;
     Ok(PathBuf::from(&folder))
-}
-
-// ── Preview mode data structures ───────────────────────────────────────
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FileContent {
-    pub path: String,
-    pub content: String,
-    pub title: String,
-    pub modified: i64,
-}
-
-fn validate_preview_path(path: &str) -> Result<PathBuf, String> {
-    let file_path = PathBuf::from(path);
-    match file_path.extension().and_then(|e| e.to_str()) {
-        Some(ext) if ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown") => {}
-        _ => return Err("Only .md and .markdown files are allowed".to_string()),
-    }
-    let canonical = file_path
-        .canonicalize()
-        .map_err(|e| format!("Cannot resolve file path: {}", e))?;
-    Ok(canonical)
-}
-
-fn get_preview_window_label(file_path: &str) -> String {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let mut hasher = DefaultHasher::new();
-    file_path.hash(&mut hasher);
-    format!("preview-{:x}", hasher.finish())
-}
-
-fn create_preview_window(app: &tauri::AppHandle, file_path: &str) -> Result<(), String> {
-    let label = get_preview_window_label(file_path);
-    if let Some(window) = app.get_webview_window(&label) {
-        window.set_focus().map_err(|e| e.to_string())?;
-        return Ok(());
-    }
-    let filename = PathBuf::from(file_path)
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "Preview".to_string());
-    // Use index.html to avoid 404/blank page when resolving route in production
-    let builder =
-        tauri::WebviewWindowBuilder::new(app, &label, tauri::WebviewUrl::App("index.html".into()))
-            .title(format!("{} \u{2014} Aoroza", filename))
-            .inner_size(800.0, 600.0)
-            .min_inner_size(400.0, 300.0)
-            .resizable(true)
-            .decorations(false);
-    let window = builder
-        .build()
-        .map_err(|e| format!("Failed to create preview window: {}", e))?;
-    // Open devtools automatically for debugging only
-    #[cfg(debug_assertions)]
-    let _ = window.open_devtools();
-    let win = window.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(500));
-        let _ = win.set_focus();
-    });
-    Ok(())
 }
 
 // ── Tauri Commands ───────────────────────────────────────────────────────
@@ -594,10 +455,40 @@ fn load_theme_css() -> Result<String, String> {
     Ok(refresh_theme_css_file()?.1)
 }
 
+fn get_mtime(entry: &walkdir::DirEntry) -> i64 {
+    entry
+        .metadata()
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+fn cache_note(state: &AppState, id: &str, meta: &NoteMetadata) {
+    if let Ok(mut cache) = state.note_metadata_cache.write() {
+        cache.insert(id.to_string(), NoteCacheEntry { metadata: meta.clone(), mtime: meta.modified });
+    }
+}
+
+fn invalidate_note_cache(state: &AppState, id: &str) {
+    if let Ok(mut cache) = state.note_metadata_cache.write() {
+        cache.remove(id);
+    }
+}
+
+fn invalidate_cache_prefix(state: &AppState, prefix: &str) {
+    if let Ok(mut cache) = state.note_metadata_cache.write() {
+        cache.retain(|k, _| !k.starts_with(prefix));
+    }
+}
+
 #[tauri::command]
 fn list_notes(state: State<AppState>) -> Result<Vec<NoteMetadata>, String> {
     let path = get_notes_folder_path(&state)?;
     if !path.exists() {
+        if let Ok(mut cache) = state.note_metadata_cache.write() { cache.clear(); }
+        if let Ok(mut folders) = state.cached_folders.write() { folders.clear(); }
         return Ok(vec![]);
     }
     let settings = state
@@ -610,6 +501,9 @@ fn list_notes(state: State<AppState>) -> Result<Vec<NoteMetadata>, String> {
     let ignored = get_effective_ignored_dirs(&settings);
 
     let mut notes = Vec::new();
+    let mut dirs = Vec::new();
+    let cache = state.note_metadata_cache.read().map_err(|e| e.to_string())?;
+
     for entry in WalkDir::new(&path)
         .max_depth(10)
         .into_iter()
@@ -617,27 +511,50 @@ fn list_notes(state: State<AppState>) -> Result<Vec<NoteMetadata>, String> {
         .flatten()
     {
         let fp = entry.path();
-        if !fp.is_file() {
+        if entry.file_type().is_dir() {
+            if fp != path {
+                if let Ok(rel) = fp.strip_prefix(&path) {
+                    let s = rel.to_string_lossy().replace('\\', "/");
+                    if !s.is_empty() { dirs.push(s); }
+                }
+            }
             continue;
         }
         if let Some(id) = id_from_path(&path, fp, &ignored) {
+            let mtime = get_mtime(&entry);
+            // Use cache when mtime matches
+            if let Some(cached) = cache.get(&id) {
+                if cached.mtime == mtime {
+                    notes.push(cached.metadata.clone());
+                    continue;
+                }
+            }
+            // Cache miss or stale — read file
             if let Ok(content) = std::fs::read_to_string(fp) {
-                let modified = entry
-                    .metadata()
-                    .ok()
-                    .and_then(|m| m.modified().ok())
-                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|d| d.as_secs() as i64)
-                    .unwrap_or(0);
-                notes.push(NoteMetadata {
-                    id,
+                let meta = NoteMetadata {
+                    id: id.clone(),
                     title: extract_title(&content),
                     preview: generate_preview(&content),
-                    modified,
-                });
+                    modified: mtime,
+                };
+                notes.push(meta);
             }
         }
     }
+    drop(cache);
+
+    // Update caches with fresh data
+    {
+        let mut new_cache = state.note_metadata_cache.write().map_err(|e| e.to_string())?;
+        for note in &notes {
+            if let std::collections::hash_map::Entry::Vacant(e) = new_cache.entry(note.id.clone()) {
+                e.insert(NoteCacheEntry { metadata: note.clone(), mtime: note.modified });
+            }
+        }
+    }
+    dirs.sort();
+    if let Ok(mut folders) = state.cached_folders.write() { *folders = dirs; }
+
     notes.sort_by(|a, b| b.modified.cmp(&a.modified));
     Ok(notes)
 }
@@ -700,13 +617,15 @@ fn save_note(id: Option<String>, content: String, state: State<AppState>) -> Res
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
-    Ok(Note {
+    let note = Note {
         id: final_id,
         title,
         content,
         path: file_path.to_string_lossy().into_owned(),
         modified,
-    })
+    };
+    cache_note(&state, &note.id, &NoteMetadata { id: note.id.clone(), title: note.title.clone(), preview: generate_preview(&note.content), modified });
+    Ok(note)
 }
 
 #[tauri::command]
@@ -730,8 +649,7 @@ fn create_note(target_folder: Option<String>, state: State<AppState>) -> Result<
         c += 1;
         final_id = format!("{}-{}", base, c);
     }
-    let display_title = extract_title_from_id(&final_id);
-    let content = format!("# {}\n\n", display_title);
+    let content = String::new();
     let file_path = abs_path_from_id(&folder, &final_id)?;
     if let Some(parent) = file_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -741,13 +659,15 @@ fn create_note(target_folder: Option<String>, state: State<AppState>) -> Result<
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
-    Ok(Note {
+    let note = Note {
         id: final_id,
-        title: display_title,
+        title: extract_title(&content),
         content,
         path: file_path.to_string_lossy().into_owned(),
         modified,
-    })
+    };
+    cache_note(&state, &note.id, &NoteMetadata { id: note.id.clone(), title: note.title.clone(), preview: generate_preview(&note.content), modified });
+    Ok(note)
 }
 
 #[tauri::command]
@@ -757,38 +677,13 @@ fn delete_note(id: String, state: State<AppState>) -> Result<(), String> {
     if file_path.exists() {
         std::fs::remove_file(&file_path).map_err(|e| e.to_string())?;
     }
+    invalidate_note_cache(&state, &id);
     Ok(())
 }
 
 #[tauri::command]
 fn list_folders(state: State<AppState>) -> Result<Vec<String>, String> {
-    let folder = get_notes_folder_path(&state)?;
-    let settings = state
-        .app_config
-        .read()
-        .map_err(|e| e.to_string())?
-        .settings
-        .clone()
-        .unwrap_or_default();
-    let ignored = get_effective_ignored_dirs(&settings);
-    let mut dirs = Vec::new();
-    for entry in WalkDir::new(&folder)
-        .max_depth(10)
-        .into_iter()
-        .filter_entry(|e| is_visible_entry(e, &ignored))
-        .flatten()
-    {
-        if entry.file_type().is_dir() && entry.path() != folder {
-            if let Ok(rel) = entry.path().strip_prefix(&folder) {
-                let s = rel.to_string_lossy().replace('\\', "/");
-                if !s.is_empty() {
-                    dirs.push(s);
-                }
-            }
-        }
-    }
-    dirs.sort();
-    Ok(dirs)
+    Ok(state.cached_folders.read().map_err(|e| e.to_string())?.clone())
 }
 
 #[tauri::command]
@@ -813,6 +708,7 @@ fn delete_folder(path: String, state: State<AppState>) -> Result<(), String> {
         return Err("Not a directory".to_string());
     }
     std::fs::remove_dir_all(&target).map_err(|e| e.to_string())?;
+    invalidate_cache_prefix(&state, &format!("{}/", path));
     Ok(())
 }
 
@@ -835,6 +731,7 @@ fn rename_folder(old_path: String, new_name: String, state: State<AppState>) -> 
         return Err("Folder already exists".to_string());
     }
     std::fs::rename(&old, &new).map_err(|e| e.to_string())?;
+    invalidate_cache_prefix(&state, &format!("{}/", old_path));
     Ok(())
 }
 
@@ -859,8 +756,14 @@ fn rename_note(old_id: String, new_name: String, state: State<AppState>) -> Resu
         return Err("Note not found".to_string());
     }
 
-    // Preserve folder path, replace leaf with new name
     let leaf = old_id.rsplit('/').next().unwrap_or(&old_id);
+
+    // No change — return early
+    if trimmed == leaf {
+        return Ok(old_id.clone());
+    }
+
+    // Preserve folder path, replace leaf with new name
     let parent = old_id.trim_end_matches(leaf).trim_end_matches('/');
     let new_id = if parent.is_empty() {
         trimmed.clone()
@@ -889,12 +792,7 @@ fn rename_note(old_id: String, new_name: String, state: State<AppState>) -> Resu
     }
     std::fs::rename(&source, &dest).map_err(|e| e.to_string())?;
 
-    // Update H1 heading in content to match new name
-    if let Ok(content) = std::fs::read_to_string(&dest) {
-        let updated = update_heading(&content, &trimmed);
-        let _ = std::fs::write(&dest, &updated);
-    }
-
+    invalidate_note_cache(&state, &old_id);
     Ok(final_id)
 }
 
@@ -919,6 +817,7 @@ fn move_note(id: String, target_folder: String, state: State<AppState>) -> Resul
         return Err("A note with that name already exists".to_string());
     }
     std::fs::rename(&source_path, &dest).map_err(|e| e.to_string())?;
+    invalidate_note_cache(&state, &id);
     Ok(new_id)
 }
 
@@ -951,6 +850,7 @@ fn move_folder(path: String, target_parent: String, state: State<AppState>) -> R
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     std::fs::rename(&source, &dest).map_err(|e| e.to_string())?;
+    invalidate_cache_prefix(&state, &format!("{}/", path));
     Ok(())
 }
 
@@ -1058,147 +958,6 @@ async fn open_in_file_manager(path: String) -> Result<(), String> {
     Ok(())
 }
 
-// ── Preview mode commands ───────────────────────────────────────────────
-
-#[tauri::command]
-fn read_file_direct(path: String) -> Result<FileContent, String> {
-    let canonical = validate_preview_path(&path)?;
-    if !canonical.is_file() {
-        return Err(format!("Not a file: {}", path));
-    }
-    let content =
-        std::fs::read_to_string(&canonical).map_err(|_| "Failed to read file".to_string())?;
-    let metadata =
-        std::fs::metadata(&canonical).map_err(|_| "Failed to read metadata".to_string())?;
-    let modified = metadata
-        .modified()
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    let title = extract_title(&content);
-    Ok(FileContent {
-        path,
-        content,
-        title,
-        modified,
-    })
-}
-
-#[tauri::command]
-fn save_file_direct(path: String, content: String) -> Result<FileContent, String> {
-    let canonical = validate_preview_path(&path)?;
-    if !canonical.is_file() {
-        return Err(format!("Not a file: {}", path));
-    }
-    std::fs::write(&canonical, &content).map_err(|_| "Failed to write file".to_string())?;
-    let metadata =
-        std::fs::metadata(&canonical).map_err(|_| "Failed to read metadata".to_string())?;
-    let modified = metadata
-        .modified()
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    let title = extract_title(&content);
-    Ok(FileContent {
-        path,
-        content,
-        title,
-        modified,
-    })
-}
-
-#[tauri::command]
-fn import_file_to_folder(
-    app: tauri::AppHandle,
-    path: String,
-    state: tauri::State<'_, AppState>,
-) -> Result<NoteMetadata, String> {
-    let source = validate_preview_path(&path)?;
-    if !source.is_file() {
-        return Err(format!("Not a file: {}", path));
-    }
-    let folder = {
-        let app_config = state.app_config.read().map_err(|e| e.to_string())?;
-        app_config
-            .notes_folder
-            .clone()
-            .ok_or("Notes folder not set".to_string())?
-    };
-    let folder_path = PathBuf::from(&folder);
-    let content =
-        std::fs::read_to_string(&source).map_err(|_| "Failed to read source file".to_string())?;
-    let extracted_title = extract_title(&content);
-    let base_name = if extracted_title.trim().is_empty() {
-        source
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("Untitled")
-            .to_string()
-    } else {
-        sanitize_filename(&extracted_title)
-    };
-    let mut final_id = base_name.clone();
-    let mut counter = 1;
-    while abs_path_from_id(&folder_path, &final_id)
-        .map(|p| p.exists())
-        .unwrap_or(false)
-    {
-        final_id = format!("{}-{}", base_name, counter);
-        counter += 1;
-    }
-    let dest = abs_path_from_id(&folder_path, &final_id)?;
-    if let Some(parent) = dest.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    std::fs::copy(&source, &dest).map_err(|_| "Failed to copy file".to_string())?;
-    let modified = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    let title = extract_title(&content);
-    let preview = generate_preview(&content);
-    let note = NoteMetadata {
-        id: final_id,
-        title,
-        preview,
-        modified,
-    };
-    let note_id = note.id.clone();
-    let _ = app.emit("select-note", &note_id);
-    if let Some(main_window) = app.get_webview_window("main") {
-        let _ = main_window.show();
-        let _ = main_window.set_focus();
-    }
-    Ok(note)
-}
-
-#[tauri::command]
-fn open_file_preview(app: tauri::AppHandle, path: String) -> Result<(), String> {
-    let file_path = PathBuf::from(&path);
-    if !file_path.exists() {
-        return Err(format!("File not found: {}", path));
-    }
-    // Store the preview file path mapped to the window label
-    if let Some(state) = app.try_state::<AppState>() {
-        let label = get_preview_window_label(&path);
-        state
-            .preview_file_paths
-            .write()
-            .unwrap()
-            .insert(label, path.clone());
-    }
-    create_preview_window(&app, &path)?;
-    Ok(())
-}
-
-#[tauri::command]
-fn get_preview_file(window: tauri::Window, state: State<'_, AppState>) -> Option<String> {
-    let label = window.label();
-    state.preview_file_paths.read().unwrap().get(label).cloned()
-}
-
 #[tauri::command]
 fn start_file_watcher(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     use notify::{RecursiveMode, Watcher};
@@ -1284,7 +1043,7 @@ fn start_file_watcher(app: tauri::AppHandle, state: State<'_, AppState>) -> Resu
 }
 
 #[tauri::command]
-fn write_file(path: String, contents: Vec<u8>) -> Result<(), String> {
+fn write_file(path: String, contents: String) -> Result<(), String> {
     std::fs::write(Path::new(&path), contents).map_err(|e| e.to_string())
 }
 
@@ -1296,32 +1055,35 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
-        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
-            if args.len() > 1 {
-                let file_path = &args[1];
-                if file_path.ends_with(".md") || file_path.ends_with(".markdown") {
-                    let path = PathBuf::from(file_path);
-                    if path.exists() && path.is_file() {
-                        let path_str = path.to_string_lossy().into_owned();
-                        let label = get_preview_window_label(&path_str);
-                        if let Some(state) = app.try_state::<AppState>() {
-                            state
-                                .preview_file_paths
-                                .write()
-                                .unwrap()
-                                .insert(label, path_str.clone());
-                        }
-                        let _ = create_preview_window(app, &path_str);
-                        return;
-                    }
-                }
-            }
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             let _ = app.get_webview_window("main").map(|w| {
                 let _ = w.show();
                 let _ = w.set_focus();
             });
         }))
         .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { .. } = event {
+                // Save window geometry before closing
+                let app = window.app_handle();
+                if let Ok(pos) = window.outer_position() {
+                    if let Ok(size) = window.outer_size() {
+                        let maximized = window.is_maximized().unwrap_or(false);
+                        if let Some(state) = app.try_state::<AppState>() {
+                            if let Ok(mut config) = state.app_config.write() {
+                                let settings = config.settings.get_or_insert_with(Settings::default);
+                                settings.window_maximized = Some(maximized);
+                                if !maximized {
+                                    settings.window_x = Some(pos.x);
+                                    settings.window_y = Some(pos.y);
+                                    settings.window_width = Some(size.width);
+                                    settings.window_height = Some(size.height);
+                                }
+                                let _ = save_config(&config);
+                            }
+                        }
+                    }
+                }
+            }
             if matches!(event, tauri::WindowEvent::Destroyed) {
                 let app = window.app_handle().clone();
                 std::thread::spawn(move || {
@@ -1335,45 +1097,25 @@ pub fn run() {
         .setup(|app| {
             app.manage(AppState {
                 app_config: RwLock::new(load_config()),
-                preview_file_paths: RwLock::new(HashMap::new()),
                 watcher: RwLock::new(None),
+                note_metadata_cache: RwLock::new(HashMap::new()),
+                cached_folders: RwLock::new(Vec::new()),
             });
 
-            // Handle CLI arguments on startup
-            let args: Vec<String> = std::env::args().collect();
-            let mut has_file_arg = false;
-            if args.len() > 1 {
-                let file_path = &args[1];
-                if file_path.ends_with(".md") || file_path.ends_with(".markdown") {
-                    let path = PathBuf::from(file_path);
-                    if path.exists() && path.is_file() {
-                        let path_str = path.to_string_lossy().into_owned();
-                        let label = get_preview_window_label(&path_str);
-                        if let Some(state) = app.try_state::<AppState>() {
-                            state
-                                .preview_file_paths
-                                .write()
-                                .unwrap()
-                                .insert(label, path_str.clone());
-                        }
-                        let _ = create_preview_window(app.handle(), &path_str);
-                        has_file_arg = true;
+            if let Some(main_window) = app.get_webview_window("main") {
+                let config = load_config();
+                if let Some(settings) = &config.settings {
+                    if settings.window_maximized == Some(true) {
+                        let _ = main_window.maximize();
+                    } else if let (Some(x), Some(y), Some(w), Some(h)) = (
+                        settings.window_x, settings.window_y,
+                        settings.window_width, settings.window_height,
+                    ) {
+                        let _ = main_window.set_position(tauri::PhysicalPosition::new(x, y));
+                        let _ = main_window.set_size(tauri::PhysicalSize::new(w, h));
                     }
                 }
-            }
-
-            if !has_file_arg {
-                if let Some(main_window) = app.get_webview_window("main") {
-                    let _ = main_window.show();
-                }
-            } else if let Some(preview_window) = app
-                .webview_windows()
-                .iter()
-                .find(|(label, _)| label.starts_with("preview-"))
-                .map(|(_, w)| w)
-            {
-                // If a preview window was created, make sure it gets focus
-                let _ = preview_window.set_focus();
+                let _ = main_window.show();
             }
 
             Ok(())
@@ -1402,11 +1144,6 @@ pub fn run() {
             open_folder_dialog,
             open_in_file_manager,
             copy_to_clipboard,
-            read_file_direct,
-            save_file_direct,
-            import_file_to_folder,
-            open_file_preview,
-            get_preview_file,
             start_file_watcher,
             write_file,
         ])

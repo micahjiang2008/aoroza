@@ -33,7 +33,6 @@ import { SearchToolbar } from "./SearchToolbar";
 import { SlashCommand } from "./SlashCommand";
 import { Wikilink } from "./Wikilink";
 import { WikilinkSuggestion } from "./WikilinkSuggestion";
-import { EditorWidthHandles } from "./EditorWidthHandle";
 import { ScratchBlockMath } from "./MathExtensions";
 import { cn } from "../../lib/utils";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
@@ -51,6 +50,10 @@ import {
   OutlineIcon, InfoIcon, MinusIcon, MaximizeIcon, XIcon,
 } from "../icons";
 import { Outline } from "./Outline";
+
+// Icons kept for hidden toolbar buttons — restore when uncommenting header/format-bar JSX
+const _hiddenIcons = { CopyIcon, ShareIcon, MarkdownIcon, MarkdownOffIcon, DownloadIcon, OutlineIcon, InfoIcon, TableIcon, BracketsIcon };
+void _hiddenIcons;
 
 function normalizeUrl(url: string): string {
   const trimmed = url.trim();
@@ -74,22 +77,9 @@ function isBlankMarkdown(content: string): boolean {
 
 const searchHighlightPluginKey = new PluginKey("searchHighlight");
 
-export interface PreviewModeData {
-  content: string | null;
-  title: string;
-  filePath: string;
-  modified: number;
-  hasExternalChanges: boolean;
-  reloadVersion: number;
-  save: (content: string) => Promise<void>;
-  reload: () => Promise<void>;
-}
-
 interface EditorProps {
   onToggleSidebar?: () => void;
   sidebarVisible?: boolean;
-  focusMode?: boolean;
-  previewMode?: PreviewModeData;
   onEditorReady?: (editor: TiptapEditor | null) => void;
   onSaveToFolder?: () => void;
   saveToFolderDisabled?: boolean;
@@ -137,20 +127,13 @@ export function Editor({
   onToggleSidebar,
   sidebarVisible,
   onEditorReady,
-  previewMode,
   onSaveToFolder,
   saveToFolderDisabled,
 }: EditorProps) {
   const notesCtx = useOptionalNotes();
-  const currentNote = previewMode
-    ? previewMode.content !== null
-      ? { id: previewMode.filePath, title: previewMode.title, content: previewMode.content, path: previewMode.filePath, modified: previewMode.modified }
-      : null
-    : (notesCtx?.currentNote ?? null);
-  const saveNote = previewMode
-    ? async (content: string) => { await previewMode.save(content); return null; }
-    : notesCtx!.saveNote;
-  const selectedNoteId = previewMode ? previewMode.filePath : (notesCtx?.selectedNoteId ?? null);
+  const currentNote = notesCtx?.currentNote ?? null;
+  const saveNote = notesCtx?.saveNote;
+  const selectedNoteId = notesCtx?.selectedNoteId ?? null;
   const { textDirection } = useTheme();
   const [isSaving, setIsSaving] = useState(false);
   const [selectionKey, setSelectionKey] = useState(0);
@@ -244,6 +227,7 @@ export function Editor({
     }, []);
 
   const saveImmediately = useCallback(async (content: string) => {
+    if (!saveNote) return;
     setIsSaving(true);
     try {
       const saved = await saveNote(content);
@@ -548,7 +532,12 @@ export function Editor({
     setCopyMenuOpen(false);
   }, [currentNote, getMarkdown]);
 
+  // State/functions kept for hidden toolbar buttons — restore when uncommenting header JSX
+  void [copyMenuOpen]; void [setCopyMenuOpen];
+  void [handleCopyMarkdown, handleCopyPlainText, handleCopyHtml, handleDownloadPdf, handleDownloadMarkdown];
+
   const editor = useEditor({
+    autofocus: true,
     extensions: [
       StarterKit.configure({ heading: { levels: [1, 2, 3, 4] }, codeBlock: false }),
       Placeholder.configure({
@@ -658,7 +647,7 @@ export function Editor({
   }, [editor, currentNote?.id]);
 
   useEffect(() => {
-    if (!editor || currentNote || selectedNoteId || previewMode) return;
+    if (!editor || currentNote || selectedNoteId) return;
     if (loadedNoteIdRef.current === null) return;
     loadedNoteIdRef.current = null;
     needsSaveRef.current = false;
@@ -672,7 +661,7 @@ export function Editor({
     } finally {
       isSettingContentRef.current = false;
     }
-  }, [editor, currentNote, selectedNoteId, previewMode]);
+  }, [editor, currentNote, selectedNoteId]);
 
   useEffect(() => {
     return () => { flushPendingSave(); };
@@ -750,16 +739,7 @@ export function Editor({
 
   const readingTime = Math.max(1, Math.ceil(charCount / 350));
 
-  if (!currentNote && (previewMode || selectedNoteId)) {
-    return (
-      <div className="flex-1 flex flex-col bg-bg">
-        <div className="h-10 shrink-0 flex items-end px-4 pb-1" data-tauri-drag-region />
-        <div className="flex-1 flex items-center justify-center">
-          <SpinnerIcon className="w-6 h-6 text-text-muted animate-spin" />
-        </div>
-      </div>
-    );
-  }
+  const isLoadingNote = !currentNote && selectedNoteId;
 
   // Toolbar items — must match scratch's FormatBar exactly
   const toolbarButtons: Array<{
@@ -791,11 +771,13 @@ export function Editor({
     { key: "wikilink", active: false, icon: <BracketsIcon className="w-4.5 h-4.5 stroke-[1.5]" />, action: () => handleAddWikilink(), title: "Insert Wikilink" },
     { key: "image", active: false, icon: <ImageIcon className="w-4.5 h-4.5 stroke-[1.5]" />, action: () => handleImageDialog(), title: "Add Image" },
   ];
+    // Keep-alive for hidden format-bar (toolbarButtons, GridPicker, tableMenuOpen, ToolbarButton, DropdownMenu)
+    void toolbarButtons; void GridPicker; void tableMenuOpen; void setTableMenuOpen; void ToolbarButton; void DropdownMenu;
 
   return (
     <div className="flex-1 flex flex-col min-w-0 bg-bg relative">
       {/* Header */}
-      <div className="h-11 shrink-0 flex items-center px-3">
+      <div className="h-11 shrink-0 flex items-center px-3 border-b border-border">
         <div className="flex items-center gap-1 min-w-0">
           {onToggleSidebar && (
             <Tooltip content={sidebarVisible ? `Hide sidebar (${mod}${isMac ? "" : "+"}B)` : `Show sidebar (${mod}${isMac ? "" : "+"}B)`}>
@@ -834,6 +816,7 @@ export function Editor({
             </IconButton>
           </Tooltip>
 
+          {/* Hidden: source mode toggle, outline toggle, status bar toggle, export — all available via Ctrl+P command palette
           <Tooltip content={sourceMode ? "View Formatted" : "View Markdown Source"}>
             <IconButton onClick={toggleSourceMode}>
               {sourceMode ? (
@@ -889,6 +872,7 @@ export function Editor({
               </DropdownMenu.Content>
             </DropdownMenu.Portal>
           </DropdownMenu.Root>
+          */}
           {onSaveToFolder && (
             <Tooltip content="Save in Folder">
               <IconButton
@@ -906,15 +890,14 @@ export function Editor({
           )}
           {!isMac && (
             <div className="ml-1 flex items-center gap-px border-l border-border/70 pl-1">
-              <IconButton onClick={minimizeWindow} title="Minimize window" aria-label="Minimize window">
+              <IconButton onClick={minimizeWindow} aria-label="Minimize window">
                 <MinusIcon className="w-4.25 h-4.25 stroke-[1.7]" />
               </IconButton>
-              <IconButton onClick={toggleMaximizeWindow} title="Maximize window" aria-label="Maximize window">
+              <IconButton onClick={toggleMaximizeWindow} aria-label="Maximize window">
                 <MaximizeIcon className="w-4 h-4 stroke-[1.55]" />
               </IconButton>
               <IconButton
                 onClick={closeWindow}
-                title="Close window"
                 aria-label="Close window"
                 className="hover:bg-red-500/15 hover:text-red-500"
               >
@@ -925,7 +908,7 @@ export function Editor({
         </div>
       </div>
 
-      {/* Format Bar */}
+      {/* Format Bar — hidden; all formatting available via markdown shortcuts / slash commands
       <div data-format-bar className="flex items-center gap-1 px-3 pb-2 border-b border-border overflow-x-auto scrollbar-none">
         {toolbarButtons.map((item, idx) =>
           item === "sep" ? (
@@ -959,6 +942,7 @@ export function Editor({
           </DropdownMenu.Portal>
         </DropdownMenu.Root>
       </div>
+      */}
 
       {/* Search toolbar */}
       {searchOpen && (
@@ -973,18 +957,21 @@ export function Editor({
       {/* Editor content area with resize handles overlay */}
       <div data-editor-content-area className="flex-1 relative overflow-hidden flex flex-row">
         <div className="flex-1 relative overflow-hidden">
-          <EditorWidthHandles containerRef={scrollContainerRef} />
-          <div ref={scrollContainerRef} className="absolute inset-0 overflow-y-auto overflow-x-hidden" dir={textDirection}>
-            {sourceMode ? (
-              <textarea value={sourceContent} onChange={handleSourceChange}
-                className="w-full h-full resize-none border-0 bg-transparent text-sm font-mono text-text pt-6 px-6 pb-16 outline-none"
-                spellCheck={false} />
-            ) : (
+          {isLoadingNote ? (
+            <div className="absolute inset-0 flex items-center justify-center">
+              <SpinnerIcon className="w-6 h-6 text-text-muted animate-spin" />
+            </div>
+          ) : sourceMode ? (
+            <textarea value={sourceContent} onChange={handleSourceChange}
+              className="absolute inset-0 resize-none border-0 bg-transparent text-sm font-mono text-text pt-6 px-6 pb-16 outline-none"
+              spellCheck={false} />
+          ) : (
+            <div ref={scrollContainerRef} className="absolute inset-0 overflow-y-auto overflow-x-hidden" dir={textDirection} onClick={() => editor?.chain().focus().run()}>
               <div className="mx-auto pt-4 pb-16 px-6">
                 <EditorContent editor={editor} />
               </div>
-            )}
-          </div>
+            </div>
+          )}
           {/* Status Bar */}
           {statusBarVisible && (
             <div className="absolute bottom-0 right-[12px] z-20 select-none pointer-events-none">

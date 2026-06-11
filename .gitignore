@@ -28,6 +28,7 @@ src-tauri/target/
 src-tauri/gen/
 
 # Build secrets
+.env
 .env.build
 
 # Release artifacts

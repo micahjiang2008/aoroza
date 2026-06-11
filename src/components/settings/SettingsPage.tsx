@@ -6,7 +6,7 @@ import {
   KeyboardIcon,
   InfoIcon,
 } from "../icons";
-import { Button, IconButton } from "../ui";
+import { Button, IconButton, Tooltip } from "../ui";
 import { GeneralSettingsSection } from "./GeneralSettingsSection";
 import { AppearanceSettingsSection } from "./EditorSettingsSection";
 import { ShortcutsSettingsSection } from "./ShortcutsSettingsSection";
@@ -61,9 +61,11 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         <div className="h-11 shrink-0" data-tauri-drag-region></div>
         <div className="flex items-center justify-between px-3 pb-2 border-b border-border shrink-0">
           <div className="flex items-center gap-1">
-            <IconButton onClick={onBack} title={`Back (${mod},)`}>
-              <ArrowLeftIcon className="w-4.5 h-4.5 stroke-[1.5]" />
-            </IconButton>
+            <Tooltip content={`Back (${mod},)`}>
+              <IconButton onClick={onBack}>
+                <ArrowLeftIcon className="w-4.5 h-4.5 stroke-[1.5]" />
+              </IconButton>
+            </Tooltip>
             <div className="font-medium text-base">Settings</div>
           </div>
         </div>

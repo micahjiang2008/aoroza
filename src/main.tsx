@@ -13,6 +13,9 @@ window.addEventListener("error", (e) => {
   console.error("Uncaught error:", e);
 });
 
+// Disable webview default context menu
+window.addEventListener("contextmenu", (e) => e.preventDefault());
+
 window.addEventListener("unhandledrejection", (e) => {
   const body = document.body;
   const div = document.createElement("div");

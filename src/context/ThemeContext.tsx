@@ -4,6 +4,7 @@ import {
   useState,
   useEffect,
   useCallback,
+  useRef,
   type ReactNode,
 } from "react";
 import { getSettings, loadThemeCss, listThemeSchemas, updateSettings } from "../services/notes";
@@ -24,20 +25,21 @@ const BUILT_IN_FONTS: Record<string, string> = {
     "ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Monaco, 'Courier New', monospace",
 };
 
-function resolveFontFamily(font: string): string {
-  return BUILT_IN_FONTS[font] ?? font;
+function resolveFontFamily(font: string, customFonts?: Record<string, string>): string {
+  return BUILT_IN_FONTS[font] ?? customFonts?.[font] ?? font;
 }
 
-function getAvailableFonts(customFonts: string[]): { value: string; label: string }[] {
+function getAvailableFonts(customFonts: Record<string, string>): { value: string; label: string }[] {
   const builtIn = [
     { value: "system-sans", label: "Sans" },
     { value: "serif", label: "Serif" },
     { value: "monospace", label: "Mono" },
   ];
-  if (customFonts.length === 0) return builtIn;
+  const customEntries = Object.entries(customFonts);
+  if (customEntries.length === 0) return builtIn;
   return [
     ...builtIn,
-    ...customFonts.map((f) => ({ value: f, label: f })),
+    ...customEntries.map(([key]) => ({ value: key, label: key })),
   ];
 }
 
@@ -89,7 +91,7 @@ interface ThemeContextType {
   customEditorWidthPx: number;
   setCustomEditorWidthPx: (px: number) => void;
   setEditorMaxWidthLive: (value: string) => void;
-  customFonts: string[];
+  customFonts: Record<string, string>;
   getAvailableFonts: () => { value: string; label: string }[];
 }
 
@@ -105,9 +107,9 @@ interface ThemeProviderProps {
   children: ReactNode;
 }
 
-function applyFontCSSVariables(fonts: Required<EditorFontSettings>) {
+function applyFontCSSVariables(fonts: Required<EditorFontSettings>, customFonts: Record<string, string>) {
   const root = document.documentElement;
-  root.style.setProperty("--editor-font-family", resolveFontFamily(fonts.baseFontFamily));
+  root.style.setProperty("--editor-font-family", resolveFontFamily(fonts.baseFontFamily, customFonts));
   root.style.setProperty("--editor-base-font-size", `${fonts.baseFontSize}px`);
   root.style.setProperty("--editor-bold-weight", String(fonts.boldWeight));
   root.style.setProperty("--editor-line-height", String(fonts.lineHeight));
@@ -168,7 +170,7 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
   const [editorWidth, setEditorWidthState] = useState<EditorWidth>("normal");
   const [interfaceZoom, setInterfaceZoomState] = useState(1.0);
   const [customEditorWidthPx, setCustomEditorWidthPxState] = useState(DEFAULT_CUSTOM_WIDTH_PX);
-  const [customFonts, setCustomFontsState] = useState<string[]>([]);
+  const [customFonts, setCustomFontsState] = useState<Record<string, string>>({});
   const [isInitialized, setIsInitialized] = useState(false);
 
   const loadSettingsFromBackend = useCallback(async () => {
@@ -270,7 +272,7 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
     saveThemeSettings(theme, nextSchema);
   }, [colorSchema, saveThemeSettings, theme]);
 
-  useEffect(() => { applyFontCSSVariables(editorFontSettings); }, [editorFontSettings]);
+  useEffect(() => { applyFontCSSVariables(editorFontSettings, customFonts); }, [editorFontSettings, customFonts]);
   useEffect(() => { applyLayoutCSSVariables(editorWidth, customEditorWidthPx); }, [editorWidth, customEditorWidthPx]);
 
   useEffect(() => {
@@ -280,13 +282,18 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
     requestAnimationFrame(() => root.classList.remove("zoom-no-transition"));
   }, [interfaceZoom]);
 
+  const fontSaveTimerRef = useRef<number | null>(null);
+
   const saveFontSettings = useCallback(async (newFontSettings: Required<EditorFontSettings>) => {
-    try {
-      const settings = await getSettings();
-      await updateSettings({ ...settings, editorFont: newFontSettings });
-    } catch (error) {
-      console.error("Failed to save font settings:", error);
-    }
+    if (fontSaveTimerRef.current) window.clearTimeout(fontSaveTimerRef.current);
+    fontSaveTimerRef.current = window.setTimeout(async () => {
+      try {
+        const settings = await getSettings();
+        await updateSettings({ ...settings, editorFont: newFontSettings });
+      } catch (error) {
+        console.error("Failed to save font settings:", error);
+      }
+    }, 500);
   }, []);
 
   const setEditorFontSetting = useCallback(<K extends keyof EditorFontSettings>(key: K, value: EditorFontSettings[K]) => {
@@ -333,9 +340,15 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
     });
   }, []);
 
+  const zoomSaveTimerRef = useRef<number | null>(null);
+
   useEffect(() => {
     if (!isInitialized) return;
-    getSettings().then((s) => updateSettings({ ...s, interfaceZoom })).catch(() => {});
+    if (zoomSaveTimerRef.current) window.clearTimeout(zoomSaveTimerRef.current);
+    zoomSaveTimerRef.current = window.setTimeout(() => {
+      getSettings().then((s) => updateSettings({ ...s, interfaceZoom })).catch(() => {});
+    }, 500);
+    return () => { if (zoomSaveTimerRef.current) window.clearTimeout(zoomSaveTimerRef.current); };
   }, [interfaceZoom, isInitialized]);
 
   const setCustomEditorWidthPx = useCallback(async (px: number) => {

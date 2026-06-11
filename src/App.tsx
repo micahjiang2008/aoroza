@@ -1,7 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import type { Editor as TiptapEditor } from "@tiptap/react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { invoke } from "@tauri-apps/api/core";
 import { ThemeProvider } from "./context/ThemeContext";
 import { NotesProvider, useNotes } from "./context/NotesContext";
 import { TooltipProvider, Toaster } from "./components/ui";
@@ -10,33 +9,15 @@ import { FolderPicker } from "./components/layout/FolderPicker";
 import { Editor } from "./components/editor/Editor";
 import { SettingsPage } from "./components/settings";
 import { CommandPalette } from "./components/command-palette/CommandPalette";
-import { PreviewApp } from "./components/preview/PreviewApp";
+import { QuickOpen } from "./components/command-palette/QuickOpen";
 import { SpinnerIcon } from "./components/icons";
-
-// Detect preview mode from window label (synchronous, no flicker)
-function isPreviewWindow(): boolean {
-  try {
-    return getCurrentWindow().label.startsWith("preview-");
-  } catch {
-    return false;
-  }
-}
-
-// Get preview file path via IPC (async)
-async function getPreviewFilePath(): Promise<string | null> {
-  try {
-    const file = await invoke<string | null>("get_preview_file");
-    return file;
-  } catch {
-    return null;
-  }
-}
 
 function AppContent() {
   const { notesFolder, isLoading } = useNotes();
-  const [sidebarVisible, setSidebarVisible] = useState(true);
+  const [sidebarVisible, setSidebarVisible] = useState(false);
   const [view, setView] = useState<"main" | "settings">("main");
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [quickOpenOpen, setQuickOpenOpen] = useState(false);
   const editorRef = useRef<TiptapEditor | null>(null);
   const toggleSidebar = useCallback(() => setSidebarVisible((v) => !v), []);
   const openSettings = useCallback(() => setView("settings"), []);
@@ -47,14 +28,23 @@ function AppContent() {
   }, []);
 
   const closePalette = useCallback(() => setPaletteOpen(false), []);
+  const closeQuickOpen = useCallback(() => setQuickOpenOpen(false), []);
 
-  // Cmd+P / Ctrl+P to open command palette; Ctrl+B to toggle sidebar (only when editor not focused)
+  // Ctrl+P → QuickOpen, Ctrl+Shift+P → Command Palette, Ctrl+B → toggle sidebar
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "p") {
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "p") {
         e.preventDefault();
         e.stopPropagation();
+        setQuickOpenOpen(false);
         setPaletteOpen(true);
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key === "p") {
+        e.preventDefault();
+        e.stopPropagation();
+        setPaletteOpen(false);
+        setQuickOpenOpen(true);
         return;
       }
       if ((e.metaKey || e.ctrlKey) && e.key === "b") {
@@ -94,7 +84,7 @@ function AppContent() {
     <div className="h-full min-h-0 flex bg-bg text-text overflow-hidden">
       <div
         data-sidebar
-        className={`transition-all duration-500 ease-out overflow-hidden ${sidebarVisible ? "opacity-100 translate-x-0 w-64" : "opacity-0 -translate-x-4 w-0 pointer-events-none"}`}
+        className={`transition-[width,opacity,transform] duration-200 ease-out overflow-hidden ${sidebarVisible ? "opacity-100 translate-x-0 w-64" : "opacity-0 -translate-x-4 w-0 pointer-events-none"}`}
       >
         <Sidebar onOpenSettings={openSettings} />
       </div>
@@ -106,22 +96,17 @@ function AppContent() {
         onOpenShortcuts={() => { openSettings(); }}
         editorRef={editorRef}
       />
+      <QuickOpen
+        open={quickOpenOpen}
+        onClose={closeQuickOpen}
+      />
     </div>
   );
 }
 
 function App() {
-  const isPreview = isPreviewWindow();
-  const [previewFile, setPreviewFile] = useState<string | null>(null);
 
-  // Fetch the preview file path on mount
-  useEffect(() => {
-    if (isPreview) {
-      getPreviewFilePath().then(setPreviewFile).catch(() => setPreviewFile(null));
-    }
-  }, [isPreview]);
-
-  // Cmd/Ctrl+W — close window (works in both preview and folder mode)
+  // Cmd/Ctrl+W — close window
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "w") {
@@ -133,32 +118,9 @@ function App() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
-  // Preview mode: lightweight editor without sidebar, search, git
-  if (isPreview) {
-    if (previewFile === null) {
-      // Still loading the file path — show spinner
-      return (
-        <ThemeProvider>
-          <div className="h-full min-h-0 flex items-center justify-center bg-bg text-text-muted">
-            <SpinnerIcon className="w-5 h-5 animate-spin stroke-[1.5]" />
-          </div>
-        </ThemeProvider>
-      );
-    }
-    return (
-      <ThemeProvider>
-        <Toaster />
-        <TooltipProvider skipDelayDuration={0}>
-          <PreviewApp filePath={previewFile} />
-        </TooltipProvider>
-      </ThemeProvider>
-    );
-  }
-
-  // Folder mode: full app with sidebar, etc.
   return (
     <ThemeProvider>
-      <TooltipProvider skipDelayDuration={0}>
+      <TooltipProvider delayDuration={700}>
         <NotesProvider>
           <AppContent />
         </NotesProvider>

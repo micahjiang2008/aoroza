@@ -13,7 +13,6 @@ import { useTheme } from "../../context/ThemeContext";
 import { downloadPdf, downloadMarkdown } from "../../services/pdf";
 import type { Editor } from "@tiptap/react";
 import { CommandItem } from "../ui";
-import { cleanTitle } from "../../lib/utils";
 import { plainTextFromMarkdown } from "../../lib/plainText";
 import {
   CopyIcon,
@@ -54,7 +53,7 @@ export function CommandPalette({
   onOpenShortcuts,
   editorRef,
 }: CommandPaletteProps) {
-  const { notes, selectNote, createNote, deleteNote, currentNote, refreshNotes, duplicateNote, notesFolder } = useNotes();
+  const { createNote, deleteNote, currentNote, refreshNotes, duplicateNote, notesFolder } = useNotes();
   const { setTheme } = useTheme();
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -305,7 +304,7 @@ export function CommandPalette({
     return baseCommands;
   }, [
     createNote, currentNote, deleteNote, onClose, onOpenSettings, onOpenShortcuts,
-    setTheme, refreshNotes, duplicateNote, notesFolder, editorRef, notes, selectNote,
+    setTheme, refreshNotes, duplicateNote, notesFolder, editorRef,
   ]);
 
   // Memoize filtered commands
@@ -317,9 +316,9 @@ export function CommandPalette({
     );
   }, [query, commands]);
 
-  // Memoize all items (commands first, then up to 10 notes)
+  // Memoize command items (notes moved to QuickOpen panel)
   const allItems = useMemo(() => {
-    const commandItems = filteredCommands.map((cmd) => ({
+    return filteredCommands.map((cmd) => ({
       type: "command" as const,
       id: cmd.id,
       label: cmd.label,
@@ -328,20 +327,7 @@ export function CommandPalette({
       action: cmd.action,
       preview: undefined as string | undefined,
     }));
-    const noteItems = notes.slice(0, 10).map((note) => ({
-      type: "note" as const,
-      id: note.id,
-      label: cleanTitle(note.title),
-      preview: note.preview,
-      shortcut: undefined as string | undefined,
-      icon: undefined as ReactNode | undefined,
-      action: () => {
-        selectNote(note.id);
-        onClose();
-      },
-    }));
-    return [...commandItems, ...noteItems];
-  }, [filteredCommands, notes, selectNote, onClose]);
+  }, [filteredCommands]);
 
   // Reset state when opened
   useEffect(() => {
@@ -443,52 +429,19 @@ export function CommandPalette({
               No results found
             </div>
           ) : (
-            <>
-              {allItems.some((item) => item.type === "command") && (
-                <div className="space-y-0.5 mb-5">
-                  <div className="text-sm font-medium text-text-muted px-2.5 py-1.5">
-                    Commands
-                  </div>
-                  {allItems.map((item, i) =>
-                    item.type === "command" ? (
-                      <div key={item.id} data-index={i}>
-                        <CommandItem
-                          label={item.label}
-                          shortcut={item.shortcut}
-                          icon={item.icon}
-                          isSelected={selectedIndex === i}
-                          onClick={item.action}
-                        />
-                      </div>
-                    ) : null
-                  )}
+            <div className="space-y-0.5">
+              {allItems.map((item, i) => (
+                <div key={item.id} data-index={i}>
+                  <CommandItem
+                    label={item.label}
+                    shortcut={item.shortcut}
+                    icon={item.icon}
+                    isSelected={selectedIndex === i}
+                    onClick={item.action}
+                  />
                 </div>
-              )}
-              {allItems.some((item) => item.type === "note") && (
-                <div className="space-y-0.5">
-                  <div className="text-sm font-medium text-text-muted px-2.5 py-1.5">
-                    Notes
-                  </div>
-                  {allItems.map((item, i) =>
-                    item.type === "note" ? (
-                      <div key={item.id} data-index={i}>
-                        <CommandItem
-                          label={item.label}
-                          subtitle={item.preview
-                            ?.replace(/&nbsp;/g, " ")
-                            .replace(/\u00A0/g, " ")
-                            .trim()}
-                          iconText={item.label.charAt(0).toUpperCase()}
-                          variant="note"
-                          isSelected={selectedIndex === i}
-                          onClick={item.action}
-                        />
-                      </div>
-                    ) : null
-                  )}
-                </div>
-              )}
-            </>
+              ))}
+            </div>
           )}
         </div>
       </div>
