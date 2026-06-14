@@ -7,13 +7,11 @@ import {
   useRef,
   type ReactNode,
 } from "react";
-import { getSettings, loadThemeCss, listThemeSchemas, updateSettings } from "../services/notes";
-import type {
-  EditorFontSettings,
-  TextDirection,
-  EditorWidth,
-  ThemeSchema,
-} from "../types/note";
+import { getSettings, loadThemeCss, listThemeSchemas, updateSettings } from "../services/app";
+import type { EditorFontSettings, ThemeSchema } from "../services/app";
+
+type TextDirection = "auto" | "ltr" | "rtl";
+type EditorWidth = "narrow" | "normal" | "wide" | "full" | "custom";
 
 type ThemeMode = "light" | "dark";
 

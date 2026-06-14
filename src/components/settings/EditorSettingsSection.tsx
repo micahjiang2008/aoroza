@@ -1,10 +1,9 @@
 import { useTheme } from "../../context/ThemeContext";
 import { Button, CodeCopyButton, IconButton, Input, Select } from "../ui";
-import type {
-  TextDirection,
-  EditorWidth,
-} from "../../types/note";
 import { EyeIcon, MinusIcon, PlusIcon, RefreshCwIcon } from "../icons";
+
+type TextDirection = "auto" | "ltr" | "rtl";
+type EditorWidth = "narrow" | "normal" | "wide" | "full" | "custom";
 
 function resolvePreviewFontFamily(font: string, customFonts?: Record<string, string>): string {
   const builtInFonts: Record<string, string> = {

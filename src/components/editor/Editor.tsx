@@ -24,29 +24,27 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { toast } from "sonner";
 import { mod, shift, alt, isMac } from "../../lib/platform";
-import { useOptionalNotes } from "../../context/NotesContext";
 import { useTheme } from "../../context/ThemeContext";
 import { Frontmatter } from "./Frontmatter";
 import { BlockMathEditor } from "./BlockMathEditor";
 import { LinkEditor } from "./LinkEditor";
 import { SearchToolbar } from "./SearchToolbar";
 import { SlashCommand } from "./SlashCommand";
-import { Wikilink } from "./Wikilink";
-import { WikilinkSuggestion } from "./WikilinkSuggestion";
 import { ScratchBlockMath } from "./MathExtensions";
 import { cn } from "../../lib/utils";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { downloadPdf, downloadMarkdown } from "../../services/pdf";
 import { IconButton, ToolbarButton, Tooltip } from "../ui";
+import * as appService from "../../services/app";
 import {
   BoldIcon, ItalicIcon, StrikethroughIcon,
   Heading1Icon, Heading2Icon, Heading3Icon, Heading4Icon,
   ListIcon, ListOrderedIcon, CheckSquareIcon, QuoteIcon,
   CodeIcon, InlineCodeIcon, BlockMathIcon, SeparatorIcon,
   LinkIcon, ImageIcon, TableIcon,
-  SpinnerIcon, CircleCheckIcon, CopyIcon, ShareIcon,
-  MarkdownIcon, MarkdownOffIcon, PanelLeftIcon,
-  SearchIcon, DownloadIcon, BracketsIcon, FolderPlusIcon,
+  SpinnerIcon, CopyIcon, ShareIcon, DownloadIcon, BracketsIcon,
+  FileIcon, FolderIcon,
+  MarkdownIcon, MarkdownOffIcon,
   OutlineIcon, InfoIcon, MinusIcon, MaximizeIcon, XIcon,
 } from "../icons";
 import { Outline } from "./Outline";
@@ -69,10 +67,6 @@ function isAllowedUrlScheme(url: string): boolean {
   } catch {
     return false;
   }
-}
-
-function isBlankMarkdown(content: string): boolean {
-  return content.replace(/&nbsp;|&#160;/g, " ").trim().length === 0;
 }
 
 const searchHighlightPluginKey = new PluginKey("searchHighlight");
@@ -124,18 +118,14 @@ function GridPicker({ onSelect }: GridPickerProps) {
 }
 
 export function Editor({
-  onToggleSidebar,
-  sidebarVisible,
   onEditorReady,
-  onSaveToFolder,
-  saveToFolderDisabled,
 }: EditorProps) {
-  const notesCtx = useOptionalNotes();
-  const currentNote = notesCtx?.currentNote ?? null;
-  const saveNote = notesCtx?.saveNote;
-  const selectedNoteId = notesCtx?.selectedNoteId ?? null;
+  const [currentFilePath, setCurrentFilePath] = useState<string | null>(null);
+  const [hasExternalChange, setHasExternalChange] = useState(false);
+  const lastMtimeRef = useRef<number>(0);
   const { textDirection } = useTheme();
-  const [isSaving, setIsSaving] = useState(false);
+  const [, setIsSaving] = useState(false);
+  const [, setIsDirty] = useState(false);
   const [selectionKey, setSelectionKey] = useState(0);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -153,13 +143,10 @@ export function Editor({
   const blockMathPopupRef = useRef<TippyInstance | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<TiptapEditor | null>(null);
-  const currentNoteIdRef = useRef<string | null>(null);
   const needsSaveRef = useRef(false);
   const loadedNoteIdRef = useRef<string | null>(null);
   const sourceTimeoutRef = useRef<number | null>(null);
   const isSettingContentRef = useRef(false);
-
-  currentNoteIdRef.current = currentNote?.id ?? null;
 
   const minimizeWindow = useCallback(() => {
     getCurrentWindow().minimize().catch(console.error);
@@ -226,18 +213,42 @@ export function Editor({
       } catch {}
     }, []);
 
-  const saveImmediately = useCallback(async (content: string) => {
-    if (!saveNote) return;
+  const saveFile = useCallback(async (markdown: string) => {
+    setIsDirty(false);
     setIsSaving(true);
     try {
-      const saved = await saveNote(content);
-      if (saved) {
-        loadedNoteIdRef.current = saved.id;
+      let filePath = currentFilePath;
+      if (filePath) {
+        const mtime = await appService.fileMtime(filePath);
+        if (mtime != null && mtime !== lastMtimeRef.current && lastMtimeRef.current !== 0) {
+          setHasExternalChange(true);
+          setIsSaving(false);
+          return;
+        }
+        setHasExternalChange(false);
+        await appService.writeFile(filePath, markdown);
+        needsSaveRef.current = false;
+        // Re-read mtime AFTER writing so next check matches
+        const newMtime = await appService.fileMtime(filePath);
+        if (newMtime != null) lastMtimeRef.current = newMtime;
+      } else {
+        filePath = await appService.saveFileDialog(markdown, "Untitled.md");
+        if (filePath) setCurrentFilePath(filePath);
       }
+      // Add to recent files
+      if (filePath) {
+        const settings = await appService.getSettings();
+        const existing = settings.recentFiles ?? [];
+        const recentFiles = [filePath, ...existing.filter((f) => f !== filePath)].slice(0, 10);
+        await appService.updateSettings({ ...settings, recentFiles });
+      }
+    } catch (err) {
+      toast.error("Failed to save file");
+      console.error(err);
     } finally {
       setIsSaving(false);
     }
-  }, [saveNote]);
+  }, [currentFilePath]);
 
   const flushPendingSave = useCallback(async () => {
     if (saveTimeoutRef.current) {
@@ -245,28 +256,22 @@ export function Editor({
       saveTimeoutRef.current = null;
     }
     if (needsSaveRef.current && editorRef.current) {
-      needsSaveRef.current = false;
       const markdown = getMarkdown(editorRef.current);
-      const isDraft = !currentNoteIdRef.current;
-      if (isDraft && isBlankMarkdown(markdown)) return;
-      await saveImmediately(markdown);
+      await saveFile(markdown);
     }
-  }, [saveImmediately, getMarkdown]);
+  }, [saveFile, getMarkdown, currentFilePath]);
 
   const scheduleSave = useCallback(() => {
     if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-    const savingNoteId = currentNote?.id ?? null;
+    if (!currentFilePath) return;  // don't auto-save untitled files
+    setIsDirty(true);
     needsSaveRef.current = true;
     saveTimeoutRef.current = window.setTimeout(async () => {
-      if (currentNoteIdRef.current !== savingNoteId || !needsSaveRef.current) return;
-      if (editorRef.current) {
-        needsSaveRef.current = false;
-        const markdown = getMarkdown(editorRef.current);
-        if (!savingNoteId && isBlankMarkdown(markdown)) return;
-        await saveImmediately(markdown);
-      }
+      if (!needsSaveRef.current || !editorRef.current) return;
+      const markdown = getMarkdown(editorRef.current);
+      await saveFile(markdown);
     }, 500);
-  }, [saveImmediately, getMarkdown, currentNote?.id]);
+  }, [saveFile, getMarkdown, currentFilePath]);
 
   const closeBlockMathPopup = useCallback(() => {
     if (blockMathPopupRef.current) { blockMathPopupRef.current.destroy(); blockMathPopupRef.current = null; }
@@ -506,31 +511,36 @@ export function Editor({
   }, []);
 
   const handleDownloadPdf = useCallback(async () => {
-    if (!currentNote) return;
     const ed = editorRef.current;
     if (!ed) return;
     try {
-      await downloadPdf(ed, currentNote.title);
+      const title = currentFilePath
+        ? (currentFilePath.split(/[/\\]/).pop() || "untitled").replace(/\.md$/i, "")
+        : "untitled";
+      await downloadPdf(ed, title);
       toast.success("PDF saved");
     } catch (err) {
       toast.error("Failed to save PDF");
       console.error(err);
     }
     setCopyMenuOpen(false);
-  }, [currentNote]);
+  }, [currentFilePath]);
 
   const handleDownloadMarkdown = useCallback(async () => {
-    if (!currentNote || !editorRef.current) return;
+    if (!editorRef.current) return;
     const md = getMarkdown(editorRef.current);
+    const title = currentFilePath
+      ? (currentFilePath.split(/[/\\]/).pop() || "untitled").replace(/\.md$/i, "")
+      : "untitled";
     try {
-      await downloadMarkdown(md, currentNote.title);
+      await downloadMarkdown(md, title);
       toast.success("Markdown saved");
     } catch (err) {
       toast.error("Failed to save markdown");
       console.error(err);
     }
     setCopyMenuOpen(false);
-  }, [currentNote, getMarkdown]);
+  }, [currentFilePath, getMarkdown]);
 
   // State/functions kept for hidden toolbar buttons — restore when uncommenting header JSX
   void [copyMenuOpen]; void [setCopyMenuOpen];
@@ -539,7 +549,7 @@ export function Editor({
   const editor = useEditor({
     autofocus: true,
     extensions: [
-      StarterKit.configure({ heading: { levels: [1, 2, 3, 4] }, codeBlock: false }),
+      StarterKit.configure({ heading: { levels: [1, 2, 3, 4] }, codeBlock: false, link: false }),
       Placeholder.configure({
         placeholder: ({ node }) => {
           if (node.type.name === "heading" && node.attrs.level === 1) return "Untitled";
@@ -563,8 +573,6 @@ export function Editor({
       }),
       Frontmatter,
       SlashCommand,
-      Wikilink,
-      WikilinkSuggestion,
       Extension.create({
         name: "selectionChange",
         addKeyboardShortcuts() {
@@ -623,45 +631,169 @@ export function Editor({
     onEditorReady?.(editor);
   }, [editor, onEditorReady]);
 
+  // Listen for files opened externally (double-click in Explorer)
   useEffect(() => {
-    if (!editor || !currentNote) return;
-    loadedNoteIdRef.current = currentNote.id;
-    const { from } = editor.state.selection;
-    const currentContent = getMarkdown(editor);
-    if (currentNote.content === currentContent) return;
-    const scrollContainer = scrollContainerRef.current;
-    let prevScrollTop = 0;
-    if (scrollContainer) prevScrollTop = scrollContainer.scrollTop;
-    isSettingContentRef.current = true;
-    try {
-      editor.chain().focus().setContent(currentNote.content, { contentType: "markdown" } as any).run();
-    } finally {
-      isSettingContentRef.current = false;
-    }
-    if (scrollContainer) scrollContainer.scrollTop = prevScrollTop;
-    if (loadedNoteIdRef.current === currentNote.id) {
-      const maxPos = editor.state.doc.content.size;
-      const restorePos = Math.min(from, Math.max(1, maxPos - 1));
-      editor.chain().setTextSelection(restorePos).run();
-    }
-  }, [editor, currentNote?.id]);
+    let unlisten: (() => void) | undefined;
+    import("@tauri-apps/api/event").then(({ listen }) => {
+      listen<{ path: string; content: string }>("file-opened", (event) => {
+        flushPendingSave();
+        setCurrentFilePath(event.payload.path);
+        setIsDirty(false);
+        loadedNoteIdRef.current = event.payload.path;
+        isSettingContentRef.current = true;
+        editor?.chain().focus().setContent(event.payload.content, { contentType: "markdown" } as any).run();
+        isSettingContentRef.current = false;
+        // Record mtime
+        appService.fileMtime(event.payload.path).then((m) => { if (m != null) lastMtimeRef.current = m; });
+        // Add to recent files
+        appService.getSettings().then((settings) => {
+          const existing = settings.recentFiles ?? [];
+          const recentFiles = [event.payload.path, ...existing.filter((f) => f !== event.payload.path)].slice(0, 10);
+          appService.updateSettings({ ...settings, recentFiles });
+        });
+      }).then((fn) => { unlisten = fn; });
+    });
+    return () => { unlisten?.(); };
+  }, [editor, flushPendingSave]);
 
+  // Check for external changes when window gains focus
   useEffect(() => {
-    if (!editor || currentNote || selectedNoteId) return;
-    if (loadedNoteIdRef.current === null) return;
-    loadedNoteIdRef.current = null;
-    needsSaveRef.current = false;
-    if (saveTimeoutRef.current) {
-      clearTimeout(saveTimeoutRef.current);
-      saveTimeoutRef.current = null;
-    }
-    isSettingContentRef.current = true;
+    const onFocus = async () => {
+      if (!currentFilePath || !editorRef.current) return;
+      const mtime = await appService.fileMtime(currentFilePath);
+      if (mtime == null || mtime === lastMtimeRef.current) return;
+      if (!needsSaveRef.current && !hasExternalChange) {
+        try {
+          const content = await appService.readFile(currentFilePath);
+          lastMtimeRef.current = mtime;
+          isSettingContentRef.current = true;
+          editorRef.current.chain().focus().setContent(content, { contentType: "markdown" } as any).run();
+          isSettingContentRef.current = false;
+        } catch { /* file may have been deleted */ }
+      } else {
+        setHasExternalChange(true);
+      }
+    };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [currentFilePath, getMarkdown]);
+
+  // Poll for external changes while window is focused (every 3s)
+  useEffect(() => {
+    if (!currentFilePath) return;
+    let timer: number;
+    let active = true;
+    const poll = async () => {
+      if (!active || !currentFilePath || !editorRef.current) return;
+      const mtime = await appService.fileMtime(currentFilePath);
+      if (mtime == null || mtime === lastMtimeRef.current || !active) return;
+      if (!needsSaveRef.current && !hasExternalChange) {
+        try {
+          const content = await appService.readFile(currentFilePath);
+          lastMtimeRef.current = mtime;
+          isSettingContentRef.current = true;
+          editorRef.current.chain().focus().setContent(content, { contentType: "markdown" } as any).run();
+          isSettingContentRef.current = false;
+        } catch {}
+      } else {
+        setHasExternalChange(true);
+      }
+    };
+    const onFocus = () => { timer = window.setInterval(poll, 3000); };
+    const onBlur = () => { clearInterval(timer); };
+    if (document.hasFocus()) onFocus();
+    window.addEventListener("focus", onFocus);
+    window.addEventListener("blur", onBlur);
+    return () => { active = false; clearInterval(timer); window.removeEventListener("focus", onFocus); window.removeEventListener("blur", onBlur); };
+  }, [currentFilePath, getMarkdown]);
+
+  // File open handler
+  const handleOpenFile = useCallback(async () => {
+    flushPendingSave();
+    const path = await appService.openFileDialog();
+    if (!path) return;
     try {
-      editor.commands.clearContent();
-    } finally {
+      const content = await appService.readFile(path);
+      // Add to recent files
+      const settings = await appService.getSettings();
+      const existing = settings.recentFiles ?? [];
+      const recentFiles = [path, ...existing.filter((f) => f !== path)].slice(0, 10);
+      await appService.updateSettings({ ...settings, recentFiles });
+
+      setCurrentFilePath(path);
+      setIsDirty(false);
+      loadedNoteIdRef.current = path;
+      isSettingContentRef.current = true;
+      editor?.chain().focus().setContent(content, { contentType: "markdown" } as any).run();
       isSettingContentRef.current = false;
+      // Record mtime
+      appService.fileMtime(path).then((m) => { if (m != null) lastMtimeRef.current = m; });
+    } catch (err) {
+      toast.error("Failed to open file");
+      console.error(err);
     }
-  }, [editor, currentNote, selectedNoteId]);
+  }, [editor, flushPendingSave]);
+
+  // File save handler (Ctrl+S)
+  const handleSaveFile = useCallback(async () => {
+    if (!editorRef.current) return;
+    const markdown = getMarkdown(editorRef.current);
+    await saveFile(markdown);
+  }, [saveFile, getMarkdown]);
+
+  // New file handler (Ctrl+N)
+  const handleNewFile = useCallback(() => {
+    flushPendingSave();
+    setCurrentFilePath(null);
+    loadedNoteIdRef.current = null;
+    isSettingContentRef.current = true;
+    editor?.chain().clearContent().focus().run();
+    isSettingContentRef.current = false;
+    setIsDirty(false);
+    lastMtimeRef.current = 0;
+    setHasExternalChange(false);
+  }, [editor, flushPendingSave]);
+
+  // Keyboard shortcuts: Ctrl+O, Ctrl+S, Ctrl+N
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const modKey = e.metaKey || e.ctrlKey;
+      if (!modKey) return;
+      if (e.key === "o" && !e.altKey) { e.preventDefault(); handleOpenFile(); }
+      else if (e.key === "s") { e.preventDefault(); handleSaveFile(); }
+      else if (e.key === "n") { e.preventDefault(); handleNewFile(); }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [handleOpenFile, handleSaveFile, handleNewFile]);
+
+  // Listen for file operation events from Command Palette
+  useEffect(() => {
+    const onOpen = () => handleOpenFile();
+    const onSave = () => handleSaveFile();
+    const onNew = () => handleNewFile();
+    const onLoadFile = (e: Event) => {
+      const { path, content } = (e as CustomEvent).detail as { path: string; content: string };
+      flushPendingSave();
+      setCurrentFilePath(path);
+      setIsDirty(false);
+      loadedNoteIdRef.current = path;
+      isSettingContentRef.current = true;
+      editor?.chain().focus().setContent(content, { contentType: "markdown" } as any).run();
+      isSettingContentRef.current = false;
+      appService.fileMtime(path).then((m) => { if (m != null) lastMtimeRef.current = m; });
+    };
+    window.addEventListener("editor-open-file", onOpen);
+    window.addEventListener("editor-save-file", onSave);
+    window.addEventListener("editor-new-file", onNew);
+    window.addEventListener("editor-load-file", onLoadFile);
+    return () => {
+      window.removeEventListener("editor-open-file", onOpen);
+      window.removeEventListener("editor-save-file", onSave);
+      window.removeEventListener("editor-new-file", onNew);
+      window.removeEventListener("editor-load-file", onLoadFile);
+    };
+  }, [handleOpenFile, handleSaveFile, handleNewFile, editor, flushPendingSave]);
 
   useEffect(() => {
     return () => { flushPendingSave(); };
@@ -671,7 +803,7 @@ export function Editor({
     if (sourceMode && editorRef.current) {
       setSourceContent(getMarkdown(editorRef.current));
     }
-  }, [sourceMode, getMarkdown, currentNote?.id]);
+  }, [sourceMode, getMarkdown]);
 
   const handleSourceChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const value = e.target.value;
@@ -709,11 +841,11 @@ export function Editor({
     return () => window.removeEventListener("toggle-status-bar", handler);
   }, [toggleStatusBar]);
 
-  // Listen for Ctrl+Alt+O / Cmd+Option+O keyboard shortcut
+  // Listen for Ctrl+Shift+O / Cmd+Shift+O keyboard shortcut
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const isO = e.key.toLowerCase() === "o";
-      const hasModifiers = (e.ctrlKey && e.altKey) || (e.metaKey && e.altKey);
+      const hasModifiers = (e.ctrlKey && e.shiftKey) || (e.metaKey && e.shiftKey);
       if (isO && hasModifiers) {
         e.preventDefault();
         e.stopPropagation();
@@ -738,8 +870,47 @@ export function Editor({
   }, [sourceMode, sourceContent, editor, selectionKey]);
 
   const readingTime = Math.max(1, Math.ceil(charCount / 350));
+  const [conflictMenuOpen, setConflictMenuOpen] = useState(false);
 
-  const isLoadingNote = !currentNote && selectedNoteId;
+  const handleReloadExternal = useCallback(async () => {
+    if (!currentFilePath || !editor) return;
+    try {
+      const content = await appService.readFile(currentFilePath);
+      const mtime = await appService.fileMtime(currentFilePath);
+      if (mtime) lastMtimeRef.current = mtime;
+      setHasExternalChange(false);
+      needsSaveRef.current = false;
+      setConflictMenuOpen(false);
+      isSettingContentRef.current = true;
+      editor.chain().focus().setContent(content, { contentType: "markdown" } as any).run();
+      isSettingContentRef.current = false;
+    } catch { toast.error("Failed to reload file"); }
+  }, [currentFilePath, editor]);
+
+  const handleSaveAsCurrent = useCallback(async () => {
+    if (!editor) return;
+    setConflictMenuOpen(false);
+    const markdown = getMarkdown(editor);
+    const path = await appService.saveFileDialog(markdown, "Untitled.md");
+    if (path) {
+      setCurrentFilePath(path);
+      setHasExternalChange(false);
+      needsSaveRef.current = false;
+      const newMtime = await appService.fileMtime(path);
+      if (newMtime) lastMtimeRef.current = newMtime;
+    }
+  }, [editor, getMarkdown]);
+
+  const handleOverwriteExternal = useCallback(async () => {
+    if (!currentFilePath || !editor) return;
+    setConflictMenuOpen(false);
+    const markdown = getMarkdown(editor);
+    await appService.writeFile(currentFilePath, markdown);
+    needsSaveRef.current = false;
+    setHasExternalChange(false);
+    const newMtime = await appService.fileMtime(currentFilePath);
+    if (newMtime) lastMtimeRef.current = newMtime;
+  }, [currentFilePath, editor, getMarkdown]);
 
   // Toolbar items — must match scratch's FormatBar exactly
   const toolbarButtons: Array<{
@@ -778,116 +949,53 @@ export function Editor({
     <div className="flex-1 flex flex-col min-w-0 bg-bg relative">
       {/* Header */}
       <div className="h-11 shrink-0 flex items-center px-3 border-b border-border">
-        <div className="flex items-center gap-1 min-w-0">
-          {onToggleSidebar && (
-            <Tooltip content={sidebarVisible ? `Hide sidebar (${mod}${isMac ? "" : "+"}B)` : `Show sidebar (${mod}${isMac ? "" : "+"}B)`}>
-              <IconButton onClick={onToggleSidebar} className="shrink-0">
-                <PanelLeftIcon className="w-4.5 h-4.5 stroke-[1.5]" />
-              </IconButton>
-            </Tooltip>
-          )}
-          {currentNote && (
-            <span className="text-xs text-text-muted mb-px truncate" title={currentNote.path}>
-              {currentNote.path.split(/[/\\]/).pop()?.replace(/\.md$/i, "")}
+        <div className="w-8 shrink-0" />
+
+        <div className="flex-1 min-w-0 self-stretch flex items-center justify-center" data-tauri-drag-region>
+          {currentFilePath ? (
+            <div className="flex items-center gap-1">
+              <Tooltip content={currentFilePath} delayDuration={300}>
+                <span className="text-xs text-text-muted truncate cursor-default">
+                  {currentFilePath.split(/[/\\]/).pop()}
+                </span>
+              </Tooltip>
+              {hasExternalChange && (
+                <div className="relative">
+                  <button
+                    onClick={() => setConflictMenuOpen(!conflictMenuOpen)}
+                    className="text-2xs text-text-muted cursor-pointer hover:text-text"
+                    title="File modified externally. Click for options."
+                  >
+                    ⚠
+                  </button>
+                  {conflictMenuOpen && (
+                    <div className="absolute top-full left-0 mt-1 bg-bg border border-border rounded-md shadow-lg py-1 z-50 w-48">
+                      <button onClick={handleReloadExternal} className="w-full text-left px-3 py-1.5 text-xs text-text hover:bg-bg-muted whitespace-nowrap">Reload from disk</button>
+                      <button onClick={handleSaveAsCurrent} className="w-full text-left px-3 py-1.5 text-xs text-text hover:bg-bg-muted whitespace-nowrap">Save as new file</button>
+                      <button onClick={handleOverwriteExternal} className="w-full text-left px-3 py-1.5 text-xs text-red-500 hover:bg-red-500/10 whitespace-nowrap">Overwrite external changes</button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          ) : (
+            <span className="text-xs text-text-muted truncate">
+              Untitled.md <span className="text-text-muted/50">(Unsaved)</span>
             </span>
           )}
         </div>
 
-        <div className="flex-1 min-w-0 self-stretch" data-tauri-drag-region />
-
         <div className="flex items-center gap-px shrink-0">
-          {isSaving ? (
-            <Tooltip content="Saving...">
-              <div className="h-7 w-7 flex items-center justify-center">
-                <SpinnerIcon className="w-4.5 h-4.5 text-text-muted/40 stroke-[1.5] animate-spin" />
-              </div>
-            </Tooltip>
-          ) : (
-            <Tooltip content="All changes saved">
-              <div className="h-7 w-7 flex items-center justify-center rounded-full">
-                <CircleCheckIcon className="w-4.5 h-4.5 mt-px stroke-[1.5] text-text-muted/40" />
-              </div>
-            </Tooltip>
-          )}
-
-          <Tooltip content={`Find in note (${mod}${isMac ? "" : "+"}F)`}>
-            <IconButton onClick={openEditorSearch}>
-              <SearchIcon className="w-4.25 h-4.25 stroke-[1.6]" />
+          <Tooltip content={`New File (${mod}${isMac ? "" : "+"}N)`}>
+            <IconButton onClick={handleNewFile}>
+              <FileIcon className="w-4.5 h-4.5 stroke-[1.5]" />
             </IconButton>
           </Tooltip>
-
-          {/* Hidden: source mode toggle, outline toggle, status bar toggle, export — all available via Ctrl+P command palette
-          <Tooltip content={sourceMode ? "View Formatted" : "View Markdown Source"}>
-            <IconButton onClick={toggleSourceMode}>
-              {sourceMode ? (
-                <MarkdownOffIcon className="w-4.75 h-4.75 stroke-[1.4]" />
-              ) : (
-                <MarkdownIcon className="w-4.75 h-4.75 stroke-[1.4]" />
-              )}
+          <Tooltip content={`Open File (${mod}${isMac ? "" : "+"}O)`}>
+            <IconButton onClick={handleOpenFile}>
+              <FolderIcon className="w-4.5 h-4.5 stroke-[1.5]" />
             </IconButton>
           </Tooltip>
-
-          <Tooltip content={outlineVisible ? "Hide Outline" : `Show Outline (${mod}${isMac ? "" : "+"}${alt}${isMac ? "" : "+"}O)`}>
-            <IconButton onClick={toggleOutline} className={outlineVisible ? "text-accent bg-bg-muted" : ""} disabled={sourceMode}>
-              <OutlineIcon className="w-4.5 h-4.5 stroke-[1.5]" />
-            </IconButton>
-          </Tooltip>
-
-          <Tooltip content={statusBarVisible ? "Hide Status Bar" : "Show Status Bar"}>
-            <IconButton onClick={toggleStatusBar} className={statusBarVisible ? "text-accent bg-bg-muted" : ""}>
-              <InfoIcon className="w-4.5 h-4.5 stroke-[1.5]" />
-            </IconButton>
-          </Tooltip>
-
-          <DropdownMenu.Root open={copyMenuOpen} onOpenChange={setCopyMenuOpen}>
-            <Tooltip content={`Export`}>
-              <DropdownMenu.Trigger asChild>
-                <IconButton>
-                  <ShareIcon className="w-4.25 h-4.25 stroke-[1.6]" />
-                </IconButton>
-              </DropdownMenu.Trigger>
-            </Tooltip>
-            <DropdownMenu.Portal>
-              <DropdownMenu.Content
-                className="min-w-35 bg-bg border border-border rounded-md shadow-lg py-1 z-50"
-                sideOffset={5} align="end"
-                onCloseAutoFocus={(e) => e.preventDefault()}
-              >
-                <DropdownMenu.Item className="px-3 py-1.5 text-sm text-text cursor-pointer outline-none hover:bg-bg-muted focus:bg-bg-muted flex items-center gap-2" onSelect={handleCopyMarkdown}>
-                  <CopyIcon className="w-4 h-4 stroke-[1.6]" />Copy Markdown
-                </DropdownMenu.Item>
-                <DropdownMenu.Item className="px-3 py-1.5 text-sm text-text cursor-pointer outline-none hover:bg-bg-muted focus:bg-bg-muted flex items-center gap-2" onSelect={handleCopyPlainText}>
-                  <CopyIcon className="w-4 h-4 stroke-[1.6]" />Copy Plain Text
-                </DropdownMenu.Item>
-                <DropdownMenu.Item className="px-3 py-1.5 text-sm text-text cursor-pointer outline-none hover:bg-bg-muted focus:bg-bg-muted flex items-center gap-2" onSelect={handleCopyHtml}>
-                  <CopyIcon className="w-4 h-4 stroke-[1.6]" />Copy HTML
-                </DropdownMenu.Item>
-                <DropdownMenu.Separator className="h-px bg-border my-1" />
-                <DropdownMenu.Item className="px-3 py-1.5 text-sm text-text cursor-pointer outline-none hover:bg-bg-muted focus:bg-bg-muted flex items-center gap-2" onSelect={handleDownloadPdf}>
-                  <DownloadIcon className="w-4 h-4 stroke-[1.6]" />Print as PDF
-                </DropdownMenu.Item>
-                <DropdownMenu.Item className="px-3 py-1.5 text-sm text-text cursor-pointer outline-none hover:bg-bg-muted focus:bg-bg-muted flex items-center gap-2" onSelect={handleDownloadMarkdown}>
-                  <DownloadIcon className="w-4 h-4 stroke-[1.6]" />Export Markdown
-                </DropdownMenu.Item>
-              </DropdownMenu.Content>
-            </DropdownMenu.Portal>
-          </DropdownMenu.Root>
-          */}
-          {onSaveToFolder && (
-            <Tooltip content="Save in Folder">
-              <IconButton
-                onClick={onSaveToFolder}
-                aria-label="Save in Folder"
-                disabled={saveToFolderDisabled}
-              >
-                {saveToFolderDisabled ? (
-                  <SpinnerIcon className="w-4.25 h-4.25 animate-spin" />
-                ) : (
-                  <FolderPlusIcon className="w-4.25 h-4.25 stroke-[1.6]" />
-                )}
-              </IconButton>
-            </Tooltip>
-          )}
           {!isMac && (
             <div className="ml-1 flex items-center gap-px border-l border-border/70 pl-1">
               <IconButton onClick={minimizeWindow} aria-label="Minimize window">
@@ -957,7 +1065,7 @@ export function Editor({
       {/* Editor content area with resize handles overlay */}
       <div data-editor-content-area className="flex-1 relative overflow-hidden flex flex-row">
         <div className="flex-1 relative overflow-hidden">
-          {isLoadingNote ? (
+          {false ? (
             <div className="absolute inset-0 flex items-center justify-center">
               <SpinnerIcon className="w-6 h-6 text-text-muted animate-spin" />
             </div>
@@ -967,15 +1075,16 @@ export function Editor({
               spellCheck={false} />
           ) : (
             <div ref={scrollContainerRef} className="absolute inset-0 overflow-y-auto overflow-x-hidden" dir={textDirection} onClick={() => editor?.chain().focus().run()}>
-              <div className="mx-auto pt-4 pb-16 px-6">
+              <div className="mx-auto pt-4 pb-8 px-6">
                 <EditorContent editor={editor} />
               </div>
             </div>
           )}
           {/* Status Bar */}
           {statusBarVisible && (
-            <div className="absolute bottom-0 right-[12px] z-20 select-none pointer-events-none">
-              <span className="px-2.5 py-0.75 rounded-t-md bg-bg-muted/70 text-2xs text-text-muted shadow-sm border-t border-x border-border/30 backdrop-blur-sm pointer-events-auto block">
+            <div className="absolute bottom-0 left-0 right-0 z-20 flex items-center justify-between px-3 py-1 h-8 bg-bg border-t border-border text-2xs text-text-muted select-none">
+              <span />
+              <span>
                 {charCount} {charCount === 1 ? "character" : "characters"} | {readingTime} min read
               </span>
             </div>

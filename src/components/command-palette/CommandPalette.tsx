@@ -6,29 +6,21 @@ import { useState,
   type KeyboardEvent,
   type ReactNode,
 } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { toast } from "sonner";
-import { useNotes } from "../../context/NotesContext";
 import { useTheme } from "../../context/ThemeContext";
-import { downloadPdf, downloadMarkdown } from "../../services/pdf";
 import type { Editor } from "@tiptap/react";
 import { CommandItem } from "../ui";
-import { plainTextFromMarkdown } from "../../lib/plainText";
 import {
-  CopyIcon,
-  DownloadIcon,
   SettingsIcon,
   SwatchIcon,
   AddNoteIcon,
-  TrashIcon,
   MarkdownIcon,
   FolderIcon,
-  FolderPlusIcon,
   KeyboardIcon,
   OutlineIcon,
   InfoIcon,
+  DownloadIcon,
 } from "../icons";
-import { mod, shift, alt } from "../../lib/platform";
+import { mod, shift } from "../../lib/platform";
 
 interface Command {
   id: string;
@@ -53,7 +45,6 @@ export function CommandPalette({
   onOpenShortcuts,
   editorRef,
 }: CommandPaletteProps) {
-  const { createNote, deleteNote, currentNote, refreshNotes, duplicateNote, notesFolder } = useNotes();
   const { setTheme } = useTheme();
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -61,177 +52,37 @@ export function CommandPalette({
   const listRef = useRef<HTMLDivElement>(null);
 
   const commands = useMemo<Command[]>(() => {
-    const baseCommands: Command[] = [
+    return [
       {
-        id: "new-note",
-        label: "New Note",
+        id: "new-file",
+        label: "New File",
         shortcut: `${mod} N`,
         icon: <AddNoteIcon className="w-4.5 h-4.5 stroke-[1.5]" />,
         action: () => {
-          createNote();
+          window.dispatchEvent(new CustomEvent("editor-new-file"));
           onClose();
         },
       },
       {
-        id: "new-folder",
-        label: "New Folder",
-        icon: <FolderPlusIcon className="w-4.5 h-4.5 stroke-[1.5]" />,
-        action: () => {
-          onClose();
-          window.dispatchEvent(new CustomEvent("create-new-folder"));
-        },
-      },
-      {
-        id: "open-folder",
-        label: "Open Notes Folder",
+        id: "open-file",
+        label: "Open File",
+        shortcut: `${mod} O`,
         icon: <FolderIcon className="w-4.5 h-4.5 stroke-[1.5]" />,
-        action: async () => {
-          try {
-            await invoke("open_in_file_manager", { path: notesFolder });
-            onClose();
-          } catch (error) {
-            console.error("Failed to open folder:", error);
-            toast.error("Failed to open folder");
-          }
+        action: () => {
+          window.dispatchEvent(new CustomEvent("editor-open-file"));
+          onClose();
         },
       },
-    ];
-
-    if (currentNote) {
-      baseCommands.push(
-        {
-          id: "duplicate-note",
-          label: "Duplicate Current Note",
-          icon: <CopyIcon className="w-4.5 h-4.5 stroke-[1.5]" />,
-          action: async () => {
-            try {
-              await duplicateNote(currentNote.id);
-              await refreshNotes();
-              onClose();
-            } catch (error) {
-              console.error("Failed to duplicate note:", error);
-            }
-          },
+      {
+        id: "save-file",
+        label: "Save",
+        shortcut: `${mod} S`,
+        icon: <DownloadIcon className="w-4.5 h-4.5 stroke-[1.5]" />,
+        action: () => {
+          window.dispatchEvent(new CustomEvent("editor-save-file"));
+          onClose();
         },
-        {
-          id: "delete-note",
-          label: "Delete Current Note",
-          icon: <TrashIcon className="w-4.5 h-4.5 stroke-[1.5]" />,
-          action: async () => {
-            try {
-              await deleteNote(currentNote.id);
-              onClose();
-            } catch (error) {
-              console.error("Failed to delete note:", error);
-              toast.error("Failed to delete note");
-            }
-          },
-        },
-        {
-          id: "copy-markdown",
-          label: "Copy Markdown",
-          icon: <CopyIcon className="w-4.5 h-4.5 stroke-[1.5]" />,
-          action: async () => {
-            try {
-              await invoke("copy_to_clipboard", { text: currentNote.content });
-              toast.success("Copied as Markdown");
-              onClose();
-            } catch (error) {
-              console.error("Failed to copy markdown:", error);
-              toast.error("Failed to copy");
-            }
-          },
-        },
-        {
-          id: "copy-plain",
-          label: "Copy Plain Text",
-          icon: <CopyIcon className="w-4.5 h-4.5 stroke-[1.5]" />,
-          action: async () => {
-            try {
-              const plainText = plainTextFromMarkdown(currentNote.content);
-              await invoke("copy_to_clipboard", { text: plainText });
-              toast.success("Copied as plain text");
-              onClose();
-            } catch (error) {
-              console.error("Failed to copy plain text:", error);
-              toast.error("Failed to copy");
-            }
-          },
-        },
-        {
-          id: "copy-html",
-          label: "Copy HTML",
-          icon: <CopyIcon className="w-4.5 h-4.5 stroke-[1.5]" />,
-          action: async () => {
-            try {
-              if (!editorRef?.current) {
-                toast.error("Editor not available");
-                return;
-              }
-              const html = editorRef.current.getHTML();
-              await invoke("copy_to_clipboard", { text: html });
-              toast.success("Copied as HTML");
-              onClose();
-            } catch (error) {
-              console.error("Failed to copy HTML:", error);
-              toast.error("Failed to copy");
-            }
-          },
-        },
-        {
-          id: "download-pdf",
-          label: "Print as PDF",
-          icon: <DownloadIcon className="w-4.5 h-4.5 stroke-[1.5]" />,
-          action: async () => {
-            try {
-              if (!editorRef?.current || !currentNote) {
-                toast.error("Editor not available");
-                return;
-              }
-              await downloadPdf(editorRef.current, currentNote.title);
-              onClose();
-            } catch (error) {
-              console.error("Failed to open print dialog:", error);
-              toast.error("Failed to open print dialog");
-            }
-          },
-        },
-        {
-          id: "download-markdown",
-          label: "Export Markdown",
-          icon: <DownloadIcon className="w-4.5 h-4.5 stroke-[1.5]" />,
-          action: async () => {
-            try {
-              if (!currentNote) {
-                toast.error("No note selected");
-                return;
-              }
-              let markdown = currentNote.content;
-              const editorInstance = editorRef?.current;
-              if (editorInstance) {
-                const manager = editorInstance.storage.markdown?.manager;
-                if (manager) {
-                  markdown = manager.serialize(editorInstance.getJSON());
-                  markdown = markdown.replace(/&nbsp;|&#160;/g, " ");
-                } else {
-                  markdown = editorInstance.getText();
-                }
-              }
-              const saved = await downloadMarkdown(markdown, currentNote.title);
-              if (saved) {
-                toast.success("Markdown saved successfully");
-                onClose();
-              }
-            } catch (error) {
-              console.error("Failed to download markdown:", error);
-              toast.error("Failed to save markdown");
-            }
-          },
-        },
-      );
-    }
-
-    baseCommands.push(
+      },
       {
         id: "toggle-source",
         label: "Toggle Markdown Source",
@@ -245,7 +96,7 @@ export function CommandPalette({
       {
         id: "toggle-outline",
         label: "Toggle Outline",
-        shortcut: `${mod} ${alt} O`,
+        shortcut: `${mod} ${shift} O`,
         icon: <OutlineIcon className="w-4.5 h-4.5 stroke-[1.5]" />,
         action: () => {
           window.dispatchEvent(new CustomEvent("toggle-outline"));
@@ -299,13 +150,8 @@ export function CommandPalette({
           onClose();
         },
       },
-    );
-
-    return baseCommands;
-  }, [
-    createNote, currentNote, deleteNote, onClose, onOpenSettings, onOpenShortcuts,
-    setTheme, refreshNotes, duplicateNote, notesFolder, editorRef,
-  ]);
+    ];
+  }, [onClose, onOpenSettings, onOpenShortcuts, setTheme, editorRef]);
 
   // Memoize filtered commands
   const filteredCommands = useMemo(() => {
