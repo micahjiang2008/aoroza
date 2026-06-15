@@ -89,25 +89,25 @@ export function AboutSettingsSection() {
       <section className="pb-2">
         <h2 className="text-xl font-medium mb-0.5">About</h2>
         <p className="text-sm text-text-muted mb-4 leading-relaxed">
-          一个安静的角落。没有云端，没有仓库，没有账号。只有你，和一张白纸。
-          键盘优先，离线原生，永远属于你。
+          A quiet place to write. No cloud, no vault, no accounts. Just you and the page.
+          Keyboard-first, offline-native, and yours forever.
         </p>
         <p className="text-sm text-text-muted mb-4">
-          衍生自{" "}
+          Forked from{" "}
           <button
             onClick={() => openUrl("https://github.com/erictli/scratch")}
             className="underline hover:text-text cursor-pointer"
           >
             Scratch
           </button>
-          {" "}
+          , crafted by Eric Li. View source on{" "}
           <button
             onClick={() => openUrl("https://github.com/micahjiang2008/aoroza")}
             className="underline hover:text-text cursor-pointer"
           >
             GitHub
           </button>
-          。
+          .
         </p>
       </section>
     </div>
