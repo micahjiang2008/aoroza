@@ -5,7 +5,7 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import { toast } from "sonner";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { Button } from "../ui";
-import { RefreshCwIcon, SpinnerIcon } from "../icons";
+import { RefreshCwIcon, SpinnerIcon, GithubIcon } from "../icons";
 
 export function AboutSettingsSection() {
   const [appVersion, setAppVersion] = useState<string>("");
@@ -87,27 +87,38 @@ export function AboutSettingsSection() {
 
       {/* About */}
       <section className="pb-2">
-        <h2 className="text-xl font-medium mb-0.5">About</h2>
-        <p className="text-sm text-text-muted mb-4 leading-relaxed">
-          A quiet place to write. No cloud, no vault, no accounts. Just you and the page.
-          Keyboard-first, offline-native, and yours forever.
-        </p>
+        <h2 className="text-xl font-medium mb-1">About Aoroza</h2>
         <p className="text-sm text-text-muted mb-4">
-          Forked from{" "}
+          A minimal markdown editor. Offline-first, keyboard-optimized, and
+          open source with no vault, no cloud, no accounts, and no
+          subscriptions.
+        </p>
+        <div className="flex items-center gap-1">
+          <Button
+            onClick={() => openUrl("https://github.com/micahjiang2008/aoroza")}
+            variant="outline"
+            size="md"
+            className="gap-1.25"
+          >
+            <GithubIcon className="w-4.5 h-4.5 stroke-[1.5]" />
+            View on GitHub
+          </Button>
+        </div>
+      </section>
+
+      {/* Divider */}
+      <div className="border-t border-border border-dashed" />
+
+      {/* Fork */}
+      <section className="pb-2">
+        <p className="text-sm text-text-muted">
+          Fork from{" "}
           <button
             onClick={() => openUrl("https://github.com/erictli/scratch")}
             className="underline hover:text-text cursor-pointer"
           >
-            Scratch
+            Scratch 0.10.0
           </button>
-          , crafted by Eric Li. View source on{" "}
-          <button
-            onClick={() => openUrl("https://github.com/micahjiang2008/aoroza")}
-            className="underline hover:text-text cursor-pointer"
-          >
-            GitHub
-          </button>
-          .
         </p>
       </section>
     </div>
