@@ -105,6 +105,22 @@ export function AboutSettingsSection() {
           </Button>
         </div>
       </section>
+
+      {/* Divider */}
+      <div className="border-t border-border border-dashed" />
+
+      {/* Fork */}
+      <section className="pb-2">
+        <p className="text-sm text-text-muted">
+          Fork from{" "}
+          <button
+            onClick={() => openUrl("https://github.com/erictli/scratch")}
+            className="underline hover:text-text cursor-pointer"
+          >
+            Scratch 0.10.0
+          </button>
+        </p>
+      </section>
     </div>
   );
 }
