@@ -48,7 +48,7 @@
       "endpoints": [
         "https://github.com/micahjiang2008/Aoroza/releases/latest/download/latest.json"
       ],
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEI0RjM3RDY1RkU4NzM3RUYKUldUdk40ZitaWDN6dEpFQVNhQ3VFNzVoZlpUZGdnc0xkeVZUeE9EdFVMVXBzZzJpT1ljV2UvWjQK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDk4NjRFRTMwRUUzODlBMEIKUldRTG1qanVNTzVrbUpqZ29MT1ltcHB1Yy9FakI5NjJOc2xEdzZMYTUxNkxNS3ljSDc3ZGY3M28K",
       "windows": {
         "installMode": "passive"
       }
