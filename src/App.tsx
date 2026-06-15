@@ -1,6 +1,9 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import type { Editor as TiptapEditor } from "@tiptap/react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { check } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
+import { toast } from "sonner";
 import { ThemeProvider } from "./context/ThemeContext";
 import { TooltipProvider, Toaster } from "./components/ui";
 import { Editor } from "./components/editor/Editor";
@@ -22,6 +25,28 @@ function AppContent() {
 
   const closePalette = useCallback(() => setPaletteOpen(false), []);
   const closeRecentFiles = useCallback(() => setRecentFilesOpen(false), []);
+
+  // Check for updates on launch
+  useEffect(() => {
+    const doCheck = async () => {
+      try {
+        const update = await check();
+        if (update?.available) {
+          toast.info(`Aoroza ${update.version} is available`, {
+            description: "Downloading update…",
+            duration: 5000,
+          });
+          await update.downloadAndInstall();
+          await relaunch();
+        }
+      } catch {
+        // Silently ignore — updater not configured or network unavailable
+      }
+    };
+    // Delay to let the app paint first
+    const timer = setTimeout(doCheck, 2000);
+    return () => clearTimeout(timer);
+  }, []);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
